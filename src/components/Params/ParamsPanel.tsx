@@ -12,32 +12,59 @@ import type { ColorOrder } from '../../core/colorPipeline';
 //
 // Values live under pattern.paramValues[patternName][key] in Zustand; we
 // write through patchParamValue so edits survive hot-reload.
-//
-// A "Color" subsection at the top of this panel tweaks the global color
-// pipeline (gamma, brightness, color order). It's always visible so you
-// can adjust output calibration without a pattern loaded.
 
 const COLOR_ORDERS: ColorOrder[] = ['RGB', 'RBG', 'GRB', 'GBR', 'BRG', 'BGR'];
 
 // Module-level constant so unloaded-pattern renders don't allocate a new
-// object each time (would break selector reference-stability if used
-// inside a selector; used as a post-selector fallback here).
+// object each call (a fresh {} would confuse useSyncExternalStore).
 const EMPTY_PARAMS: Record<string, any> = {};
 
 function labelFor(key: string, spec: ParamSpec): string {
   if (spec.label) return spec.label;
-  // Convert camelCase → Sentence case for a friendlier display.
   return key
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase());
 }
 
+type StackedProps = {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (v: number) => void;
+  integer?: boolean;
+};
+
+function StackedSliderNumber({ label, min, max, step, value, onChange, integer }: StackedProps) {
+  const coerce = (v: number) => (integer ? Math.round(v) : v);
+  return (
+    <div className="field-stacked">
+      <span>{label}</span>
+      <div className="field-row">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(coerce(Number(e.target.value)))}
+        />
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(coerce(Number(e.target.value)))}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function ParamsPanel() {
   const active = useAppStore((s) => s.pattern.active);
-  // IMPORTANT: selector must return a reference-stable value. Returning a
-  // fresh `{}` each call makes React's useSyncExternalStore think the
-  // snapshot changed every render and either warn or bail out. We return
-  // the stored values or undefined and fall back in the render body.
   const storedValues = useAppStore((s) =>
     active ? s.pattern.paramValues[active.name] : undefined,
   );
@@ -54,48 +81,22 @@ export function ParamsPanel() {
   return (
     <section className="panel-section">
       <h2>Color</h2>
-      <div className="field-stacked">
-        <span>Brightness</span>
-        <div className="field-row">
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={color.brightness}
-            onChange={(e) => patchColor({ brightness: Number(e.target.value) })}
-          />
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={color.brightness}
-            onChange={(e) => patchColor({ brightness: Number(e.target.value) })}
-          />
-        </div>
-      </div>
-      <div className="field-stacked">
-        <span>Gamma</span>
-        <div className="field-row">
-          <input
-            type="range"
-            min={1}
-            max={3.2}
-            step={0.01}
-            value={color.gamma}
-            onChange={(e) => patchColor({ gamma: Number(e.target.value) })}
-          />
-          <input
-            type="number"
-            min={1}
-            max={3.2}
-            step={0.01}
-            value={color.gamma}
-            onChange={(e) => patchColor({ gamma: Number(e.target.value) })}
-          />
-        </div>
-      </div>
+      <StackedSliderNumber
+        label="Brightness"
+        min={0}
+        max={1}
+        step={0.01}
+        value={color.brightness}
+        onChange={(v) => patchColor({ brightness: v })}
+      />
+      <StackedSliderNumber
+        label="Gamma"
+        min={1}
+        max={3.2}
+        step={0.01}
+        value={color.gamma}
+        onChange={(v) => patchColor({ gamma: v })}
+      />
       <div className="field">
         <span>Color order</span>
         <select
@@ -119,7 +120,6 @@ export function ParamsPanel() {
         entries.map(([key, spec]) => (
           <ParamControl
             key={key}
-            name={key}
             label={labelFor(key, spec)}
             spec={spec}
             value={values[key] ?? (spec as any).default}
@@ -132,7 +132,6 @@ export function ParamsPanel() {
 }
 
 type ControlProps = {
-  name: string;
   label: string;
   spec: ParamSpec;
   value: any;
@@ -142,53 +141,17 @@ type ControlProps = {
 function ParamControl({ label, spec, value, onChange }: ControlProps) {
   switch (spec.type) {
     case 'range':
-      return (
-        <div className="field-stacked">
-          <span>{label}</span>
-          <div className="field-row">
-            <input
-              type="range"
-              min={spec.min}
-              max={spec.max}
-              step={spec.step ?? 0.01}
-              value={Number(value)}
-              onChange={(e) => onChange(Number(e.target.value))}
-            />
-            <input
-              type="number"
-              min={spec.min}
-              max={spec.max}
-              step={spec.step ?? 0.01}
-              value={Number(value)}
-              onChange={(e) => onChange(Number(e.target.value))}
-            />
-          </div>
-        </div>
-      );
-
     case 'int':
       return (
-        <div className="field-stacked">
-          <span>{label}</span>
-          <div className="field-row">
-            <input
-              type="range"
-              min={spec.min}
-              max={spec.max}
-              step={spec.step ?? 1}
-              value={Number(value)}
-              onChange={(e) => onChange(Math.round(Number(e.target.value)))}
-            />
-            <input
-              type="number"
-              min={spec.min}
-              max={spec.max}
-              step={spec.step ?? 1}
-              value={Number(value)}
-              onChange={(e) => onChange(Math.round(Number(e.target.value)))}
-            />
-          </div>
-        </div>
+        <StackedSliderNumber
+          label={label}
+          min={spec.min}
+          max={spec.max}
+          step={spec.step ?? (spec.type === 'int' ? 1 : 0.01)}
+          value={Number(value)}
+          onChange={onChange}
+          integer={spec.type === 'int'}
+        />
       );
 
     case 'color':

@@ -21,22 +21,26 @@ export type AudioState = {
 };
 
 // Beat detector: a rolling mean of `energy`, with a threshold * mean trigger
-// plus a cooldown so a single clap doesn't flash multiple frames.
+// plus a cooldown so a single clap doesn't flash multiple frames. Ring buffer
+// avoids O(n) shift() on every frame.
 class BeatDetector {
-  private history: number[] = [];
-  private historyLen = 43;    // ~0.7 s at 60 fps — fast enough for tempo
-  private threshold = 1.35;   // energy must exceed mean * threshold
+  private static HISTORY_LEN = 43;    // ~0.7 s at 60 fps
+  private history = new Float32Array(BeatDetector.HISTORY_LEN);
+  private head = 0;
+  private filled = 0;
+  private threshold = 1.35;
   private cooldownMs = 180;
   private lastBeatAt = 0;
 
   detect(energy: number, nowMs: number): boolean {
-    this.history.push(energy);
-    if (this.history.length > this.historyLen) this.history.shift();
-    if (this.history.length < 8) return false;
+    this.history[this.head] = energy;
+    this.head = (this.head + 1) % BeatDetector.HISTORY_LEN;
+    if (this.filled < BeatDetector.HISTORY_LEN) this.filled++;
+    if (this.filled < 8) return false;
 
     let sum = 0;
-    for (let i = 0; i < this.history.length; i++) sum += this.history[i];
-    const mean = sum / this.history.length;
+    for (let i = 0; i < this.filled; i++) sum += this.history[i];
+    const mean = sum / this.filled;
 
     if (energy > mean * this.threshold && nowMs - this.lastBeatAt > this.cooldownMs) {
       this.lastBeatAt = nowMs;

@@ -55,7 +55,7 @@ export default class Rain {
   render(ctx, out) {
     const { N, params, utils } = ctx;
     out.fill(0);
-    const [rr, gg, bb] = utils.mix(params.color, params.color, 0);
+    const [rr, gg, bb] = utils.parseColor(params.color);
 
     for (const d of this.drops) {
       const dx = d.x, dz = d.z;

@@ -39,52 +39,33 @@ export function voxelIndex(x: number, y: number, z: number, N: number): number {
 }
 
 /**
- * Compact centered Float32Array of length ledCount*3 — world-space positions
- * for each voxel in logical-index order. Used to seed InstancedMesh.
- */
-export function buildPositions(spec: CubeSpec): Float32Array {
-  const { N } = spec;
-  const s = spacing(spec);
-  const half = ((N - 1) / 2) * s;
-  const out = new Float32Array(N * N * N * 3);
-  let i = 0;
-  for (let x = 0; x < N; x++) {
-    for (let y = 0; y < N; y++) {
-      for (let z = 0; z < N; z++) {
-        out[i * 3 + 0] = x * s - half;
-        out[i * 3 + 1] = y * s - half;
-        out[i * 3 + 2] = z * s - half;
-        i++;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * Per-voxel normalized + centered coords, handy for pattern authors.
- * Returned as parallel Float32Arrays to stay allocation-free per frame.
+ * Per-voxel normalized + centered coords, plus world-space positions.
+ * Parallel Float32Arrays stay allocation-free in the per-frame hot path.
  */
 export type VoxelCoords = {
   N: number;
   count: number;
-  // integer lattice coords [0, N-1]
-  xs: Int16Array;
+  positions: Float32Array;  // world-space (x,y,z) * count
+  xs: Int16Array;           // integer lattice [0, N-1]
   ys: Int16Array;
   zs: Int16Array;
-  // normalized [0,1]
-  us: Float32Array;
+  us: Float32Array;         // normalized [0,1]
   vs: Float32Array;
   ws: Float32Array;
-  // centered [-1,1]
-  cxs: Float32Array;
+  cxs: Float32Array;        // centered [-1,1]
   cys: Float32Array;
   czs: Float32Array;
 };
 
+/**
+ * Build all per-voxel buffers in logical-index order in one pass.
+ */
 export function buildCoords(spec: CubeSpec): VoxelCoords {
   const { N } = spec;
   const count = N * N * N;
+  const s = spacing(spec);
+  const half = ((N - 1) / 2) * s;
+  const positions = new Float32Array(count * 3);
   const xs = new Int16Array(count);
   const ys = new Int16Array(count);
   const zs = new Int16Array(count);
@@ -99,6 +80,9 @@ export function buildCoords(spec: CubeSpec): VoxelCoords {
   for (let x = 0; x < N; x++) {
     for (let y = 0; y < N; y++) {
       for (let z = 0; z < N; z++) {
+        positions[i * 3 + 0] = x * s - half;
+        positions[i * 3 + 1] = y * s - half;
+        positions[i * 3 + 2] = z * s - half;
         xs[i] = x;
         ys[i] = y;
         zs[i] = z;
@@ -115,5 +99,5 @@ export function buildCoords(spec: CubeSpec): VoxelCoords {
       }
     }
   }
-  return { N, count, xs, ys, zs, us, vs, ws, cxs, cys, czs };
+  return { N, count, positions, xs, ys, zs, us, vs, ws, cxs, cys, czs };
 }

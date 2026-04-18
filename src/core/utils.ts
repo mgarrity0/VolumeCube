@@ -16,7 +16,7 @@ export function smoothstep(a: number, b: number, v: number): number {
 }
 
 // Parse "#rrggbb" or [r,g,b] (0..255) into a 3-tuple of 0..255.
-function toRGB(c: string | number[]): RGB {
+export function parseColor(c: string | number[]): RGB {
   if (typeof c === 'string') {
     const h = c.startsWith('#') ? c.slice(1) : c;
     if (h.length === 3) {
@@ -35,8 +35,8 @@ function toRGB(c: string | number[]): RGB {
 
 // Linear interpolation between two colors at t in [0,1]. Returns [r,g,b] 0..255.
 export function mix(a: string | number[], b: string | number[], t: number): RGB {
-  const [ar, ag, ab] = toRGB(a);
-  const [br, bg, bb] = toRGB(b);
+  const [ar, ag, ab] = parseColor(a);
+  const [br, bg, bb] = parseColor(b);
   const k = clamp(t, 0, 1);
   return [
     ar + (br - ar) * k,
@@ -123,4 +123,5 @@ export const patternUtils: PatternUtils = {
   mix,
   hsv,
   noise3d,
+  parseColor,
 };

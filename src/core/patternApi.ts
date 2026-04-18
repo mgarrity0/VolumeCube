@@ -52,6 +52,7 @@ export type PatternUtils = {
   mix: (a: string | number[], b: string | number[], t: number) => [number, number, number];
   hsv: (h: number, s: number, v: number) => [number, number, number];
   noise3d: (x: number, y: number, z: number) => number;
+  parseColor: (c: string | number[]) => [number, number, number];
 };
 
 export type RenderContext = {

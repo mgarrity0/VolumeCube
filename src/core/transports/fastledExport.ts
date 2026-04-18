@@ -12,13 +12,13 @@
 // surfaces the expected size.
 
 import { invoke } from '@tauri-apps/api/core';
-import { ledCount, type CubeSpec } from '../cubeGeometry';
-import type { LoadedPattern, ParamSchema, RenderContext, SetupContext, VoxelCoord } from '../patternApi';
+import { ledCount, buildCoords, type CubeSpec } from '../cubeGeometry';
+import type { LoadedPattern, RenderContext, SetupContext } from '../patternApi';
 import { patternUtils } from '../utils';
-import { buildGammaLut, bakeStreamBytes, type ColorConfig } from '../colorPipeline';
+import { buildGammaLut, computeDuty, bakeFrame, type ColorConfig } from '../colorPipeline';
 import { estimatePower, type PowerConfig } from '../power';
 import { buildAddressMap, type WiringConfig } from '../wiring';
-import { buildCoords } from '../cubeGeometry';
+import { renderPatternFrame } from '../patternRender';
 
 export type ExportOptions = {
   seconds: number;
@@ -53,14 +53,9 @@ export async function exportFastLed(args: {
   const totalFrames = Math.max(1, Math.round(seconds * fps));
   const dt = 1 / fps;
 
-  // Run setup once. Class patterns carry persistent state on their
-  // instance; function patterns may provide an optional setup hook too.
   const setupCtx: SetupContext = { N, params: paramValues };
   if (pattern.setup) pattern.setup(setupCtx);
 
-  // Baked frame array, one row per frame.
-  // Storing as strings so we can assemble the sketch without a 450KB
-  // worst-case intermediate array of numbers.
   const rows: string[] = [];
 
   for (let f = 0; f < totalFrames; f++) {
@@ -70,43 +65,18 @@ export async function exportFastLed(args: {
       frame: f,
       N,
       params: paramValues,
-      // Offline export: no live mic. Beat-reactive patterns will look
-      // dormant in the baked loop — documented constraint of the v1
-      // exporter.
+      // Offline export has no live mic; beat-reactive patterns will look
+      // dormant in the baked loop.
       audio: { energy: 0, low: 0, mid: 0, high: 0, beat: false },
       power: { amps: 0, watts: 0, budgetAmps: power.budgetAmps, scale: 1 },
       utils: patternUtils,
     };
 
-    if (pattern.kind === 'class' && pattern.instance) {
-      pattern.instance.update?.(ctx);
-      pattern.instance.render(ctx, patternBuf);
-    } else if (pattern.kind === 'function' && pattern.renderVoxel) {
-      const xyz: VoxelCoord = {
-        x: 0, y: 0, z: 0, u: 0, v: 0, w: 0, cx: 0, cy: 0, cz: 0, i: 0,
-      };
-      const { xs, ys, zs, us, vs, ws, cxs, cys, czs } = coords;
-      for (let i = 0; i < count; i++) {
-        xyz.x = xs[i]; xyz.y = ys[i]; xyz.z = zs[i];
-        xyz.u = us[i]; xyz.v = vs[i]; xyz.w = ws[i];
-        xyz.cx = cxs[i]; xyz.cy = cys[i]; xyz.cz = czs[i];
-        xyz.i = i;
-        const rgb = pattern.renderVoxel(ctx, xyz);
-        patternBuf[i * 3 + 0] = rgb[0];
-        patternBuf[i * 3 + 1] = rgb[1];
-        patternBuf[i * 3 + 2] = rgb[2];
-      }
-    }
+    renderPatternFrame(pattern, ctx, coords, patternBuf);
 
-    // Same color/power pipeline as the live render so the baked bytes
-    // match what the simulator shows at the moment of capture.
-    const brightness = color.brightness;
-    for (let i = 0; i < dutyBuf.length; i++) {
-      const v = patternBuf[i] * brightness;
-      dutyBuf[i] = v > 255 ? 255 : v;
-    }
+    computeDuty(patternBuf, color.brightness, dutyBuf);
     const pre = estimatePower(dutyBuf, power);
-    bakeStreamBytes(patternBuf, streamBuf, color, gammaLut, pre.scale, addressMap);
+    bakeFrame(patternBuf, color, gammaLut, pre.scale, addressMap, null, streamBuf);
     rows.push(formatFrameRow(streamBuf));
   }
 
@@ -116,7 +86,6 @@ export async function exportFastLed(args: {
     dataPin,
     fps,
     totalFrames,
-    paramsSchema: pattern.params,
     paramValues,
     patternName: pattern.displayName,
     colorOrder: color.colorOrder,
@@ -144,8 +113,6 @@ export function estimateExportSize(N: number, seconds: number, fps: number): num
 }
 
 function formatFrameRow(bytes: Uint8Array): string {
-  // Pack as hex pairs separated by commas — readable in the sketch and
-  // compact enough that 450KB+ compiles without choking avr-gcc.
   let s = '';
   for (let i = 0; i < bytes.length; i++) {
     if (i > 0) s += ',';
@@ -160,7 +127,6 @@ function buildSketch(args: {
   dataPin: number;
   fps: number;
   totalFrames: number;
-  paramsSchema: ParamSchema;
   paramValues: Record<string, any>;
   patternName: string;
   colorOrder: string;
@@ -168,17 +134,14 @@ function buildSketch(args: {
 }): string {
   const {
     N, count, dataPin, fps, totalFrames,
-    paramsSchema, paramValues, patternName, colorOrder,
+    paramValues, patternName, colorOrder,
     frames,
   } = args;
 
   const frameBytes = count * 3;
-  const rgbOrder = colorOrder === 'GRB' ? 'GRB' : colorOrder === 'RGB' ? 'RGB' :
-                   colorOrder === 'BRG' ? 'BRG' : colorOrder === 'BGR' ? 'BGR' :
-                   colorOrder === 'GBR' ? 'GBR' : 'RBG';
 
-  const paramsComment = Object.keys(paramsSchema)
-    .map((k) => `//   ${k} = ${JSON.stringify(paramValues[k] ?? (paramsSchema[k] as any).default)}`)
+  const paramsComment = Object.keys(paramValues)
+    .map((k) => `//   ${k} = ${JSON.stringify(paramValues[k])}`)
     .join('\n');
 
   const framesSource = frames
@@ -209,7 +172,7 @@ ${framesSource}
 };
 
 void setup() {
-  FastLED.addLeds<WS2815, DATA_PIN, ${rgbOrder}>(leds, LED_COUNT);
+  FastLED.addLeds<WS2815, DATA_PIN, ${colorOrder}>(leds, LED_COUNT);
   FastLED.setBrightness(255);
   FastLED.clear();
   FastLED.show();

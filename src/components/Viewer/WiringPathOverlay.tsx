@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { useAppStore } from '../../state/store';
-import { buildPositions } from '../../core/cubeGeometry';
+import { buildCoords } from '../../core/cubeGeometry';
 import { buildAddressMap, buildStreamPath } from '../../core/wiring';
 
 // Thin polyline through all LEDs in stream order. Used to eyeball whether
@@ -20,7 +20,7 @@ export function WiringPathOverlay() {
   const wiring = useAppStore((s) => s.wiring);
 
   const { positions, colors } = useMemo(() => {
-    const logical = buildPositions(cube);
+    const logical = buildCoords(cube).positions;
     const map = buildAddressMap(wiring, cube.N);
     const streamPositions = buildStreamPath(map, logical);
     const count = streamPositions.length / 3;

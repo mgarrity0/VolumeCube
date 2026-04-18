@@ -101,7 +101,7 @@ export function buildAddressMap(cfg: WiringConfig, N: number): Uint32Array {
  * Build positions in stream order — used by the wiring-path overlay to
  * draw a continuous polyline through the LEDs in the order they're wired.
  * The `positions` argument is the logical-order position buffer produced
- * by cubeGeometry.buildPositions().
+ * by cubeGeometry.buildCoords().
  */
 export function buildStreamPath(
   addressMap: Uint32Array,

@@ -74,7 +74,10 @@ export function OutputPanel() {
     try {
       const p = await listSerialPorts();
       setPorts(p);
-      if (p.length && !output.serialPort) patchOutput({ serialPort: p[0] });
+      // Read current state here (not the closed-over value) so the first
+      // effect-triggered refresh after mount doesn't race the first render.
+      const currentPort = useAppStore.getState().output.serialPort;
+      if (p.length && !currentPort) patchOutput({ serialPort: p[0] });
     } catch (e: any) {
       setOutputStats({ ...stats, lastError: e?.message ?? String(e) });
     }
@@ -134,10 +137,8 @@ export function OutputPanel() {
     }
   };
 
-  const connectLabel =
-    output.kind === 'off' ? 'Off' :
-    output.kind === 'export' ? null :
-    stats.connected ? 'Disconnect' : 'Connect';
+  const showConnectButton = output.kind === 'wled' || output.kind === 'serial';
+  const connectLabel = stats.connected ? 'Disconnect' : 'Connect';
 
   return (
     <section className="panel-section">
@@ -278,7 +279,7 @@ export function OutputPanel() {
         </>
       )}
 
-      {connectLabel !== null && output.kind !== 'off' && (
+      {showConnectButton && (
         <button
           onClick={stats.connected ? onDisconnect : onConnect}
           disabled={busy}

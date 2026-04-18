@@ -1,43 +1,36 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import {
-  useAppStore,
-  getCube,
-  getActivePattern,
-  getActiveParamValues,
-  getColorConfig,
-  getPowerConfig,
-} from '../../state/store';
-import { buildCoords, buildPositions, ledCount, spacing } from '../../core/cubeGeometry';
-import type { RenderContext, VoxelCoord } from '../../core/patternApi';
+import { useAppStore } from '../../state/store';
+import { buildCoords, ledCount, spacing } from '../../core/cubeGeometry';
+import type { RenderContext } from '../../core/patternApi';
 import { patternUtils } from '../../core/utils';
-import { buildGammaLut, bakeLinearFloats, bakeStreamBytes } from '../../core/colorPipeline';
+import { buildGammaLut, computeDuty, bakeFrame } from '../../core/colorPipeline';
 import { estimatePower } from '../../core/power';
 import { audioEngine } from '../../core/audio';
 import { buildAddressMap } from '../../core/wiring';
 import { transportManager } from '../../core/transports';
+import { renderPatternFrame } from '../../core/patternRender';
 
 // InstancedMesh of all N³ LEDs + per-frame pattern rendering.
 //
 // Per-frame pipeline:
 //   1. audioEngine.update() — fresh FFT bins + beat flag for ctx.audio
 //   2. Run the active pattern into patternBuf (Uint8, 0..255).
-//   3. Build duty buffer (brightness-scaled) for power estimation.
+//   3. computeDuty → dutyBuf (brightness-scaled) for power estimate.
 //   4. estimatePower → pre-ABL amps + scale factor.
-//   5. bakeLinearFloats → brightness + gamma + ABL + color-order shuffle
-//      written directly into the instanceColor Float32 buffer.
-//   6. Throttled push of live power reading into Zustand.
+//   5. bakeFrame — brightness + gamma + ABL + color-order shuffle written
+//      into the Float32 instanceColor buffer and, if a transport is live,
+//      also into the stream-ordered byte buffer in the same pass.
 //
-// State is read via non-reactive getters so unrelated UI changes don't
-// force this component to re-render mid-stream.
+// Hot state is read once per frame via a single getState() snapshot so
+// unrelated UI changes don't force this component to re-render mid-stream.
 
 const DUMMY = new THREE.Object3D();
 const DUMMY_COLOR = new THREE.Color();
 
 // How often to push powerLive into Zustand (every Nth frame). Updates
-// the panel readouts at ~7.5 Hz at 60 fps — smooth to read, cheap to
-// render.
+// the panel readouts at ~7.5 Hz at 60 fps.
 const POWER_PUSH_INTERVAL = 8;
 
 export function Cube() {
@@ -45,19 +38,13 @@ export function Cube() {
   const wiring = useAppStore((s) => s.wiring);
   const ref = useRef<THREE.InstancedMesh>(null);
 
-  const positions = useMemo(() => buildPositions(cube), [cube]);
   const coords = useMemo(() => buildCoords(cube), [cube]);
   const count = ledCount(cube);
   const radius = Math.max(0.005, spacing(cube) * 0.28);
 
-  // Pattern output (0..255) and brightness-applied duty buffer for power.
-  // Both resize only when N changes.
   const patternBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const dutyBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
-  // Stream-ordered 8-bit output for transports. Only populated when a
-  // transport is connected.
   const streamBuf = useMemo(() => new Uint8Array(count * 3), [count]);
-  // Logical→stream lookup. Rebuilt only when wiring or N changes.
   const addressMap = useMemo(() => buildAddressMap(wiring, cube.N), [wiring, cube.N]);
 
   // Cached gamma LUT — rebuilt only when colorCfg.gamma changes.
@@ -76,7 +63,7 @@ export function Cube() {
   useEffect(() => {
     const mesh = ref.current;
     if (!mesh) return;
-
+    const { positions } = coords;
     for (let i = 0; i < count; i++) {
       DUMMY.position.set(
         positions[i * 3 + 0],
@@ -92,7 +79,7 @@ export function Cube() {
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     mesh.count = count;
     clock.current.setupCookie = -1;
-  }, [positions, count]);
+  }, [coords, count]);
 
   useFrame((state, delta) => {
     const mesh = ref.current;
@@ -101,17 +88,18 @@ export function Cube() {
     const nowMs = performance.now();
     audioEngine.update(nowMs);
 
-    const activePattern = getActivePattern();
-    const paramValues = getActiveParamValues();
-    const spec = getCube();
-    const colorCfg = getColorConfig();
-    const powerCfg = getPowerConfig();
-    const now = state.clock.getElapsedTime();
+    const store = useAppStore.getState();
+    const activePattern = store.pattern.active;
+    if (!activePattern) return;
 
-    // No active pattern → hold the seed frame and skip work.
-    if (!activePattern) {
-      return;
-    }
+    const spec = store.cube;
+    const colorCfg = store.color;
+    const powerCfg = store.power;
+    const paramValues = store.pattern.paramValues[activePattern.name] ?? {};
+    const loadToken = store.pattern.loadToken;
+    const lastPower = store.powerLive;
+    const outputCfg = store.output;
+    const now = state.clock.getElapsedTime();
 
     // Rebuild gamma LUT on demand.
     if (gammaLutRef.current.gamma !== colorCfg.gamma) {
@@ -120,7 +108,6 @@ export function Cube() {
     }
 
     // Reset time base + run setup when a new pattern was activated.
-    const loadToken = useAppStore.getState().pattern.loadToken;
     if (clock.current.setupCookie !== loadToken) {
       clock.current.setupCookie = loadToken;
       clock.current.patternStart = now;
@@ -129,17 +116,12 @@ export function Cube() {
         try {
           activePattern.setup({ N: spec.N, params: paramValues });
         } catch (e) {
-          useAppStore.getState().setPatternError(String(e));
-          useAppStore.getState().setActivePattern(null);
+          store.setPatternError(String(e));
+          store.setActivePattern(null);
           return;
         }
       }
     }
-
-    // Pattern ctx gets last frame's power reading — patterns that gate
-    // on power see a one-frame-stale value which is fine for brightness
-    // compensation effects.
-    const lastPower = useAppStore.getState().powerLive;
 
     const ctx: RenderContext = {
       t: now - clock.current.patternStart,
@@ -164,61 +146,39 @@ export function Cube() {
     };
 
     try {
-      if (activePattern.kind === 'class' && activePattern.instance) {
-        activePattern.instance.update?.(ctx);
-        activePattern.instance.render(ctx, patternBuf);
-      } else if (activePattern.kind === 'function' && activePattern.renderVoxel) {
-        const xyz: VoxelCoord = {
-          x: 0, y: 0, z: 0, u: 0, v: 0, w: 0, cx: 0, cy: 0, cz: 0, i: 0,
-        };
-        const { xs, ys, zs, us, vs, ws, cxs, cys, czs, count: n } = coords;
-        for (let i = 0; i < n; i++) {
-          xyz.x = xs[i]; xyz.y = ys[i]; xyz.z = zs[i];
-          xyz.u = us[i]; xyz.v = vs[i]; xyz.w = ws[i];
-          xyz.cx = cxs[i]; xyz.cy = cys[i]; xyz.cz = czs[i];
-          xyz.i = i;
-          const rgb = activePattern.renderVoxel(ctx, xyz);
-          patternBuf[i * 3 + 0] = rgb[0];
-          patternBuf[i * 3 + 1] = rgb[1];
-          patternBuf[i * 3 + 2] = rgb[2];
-        }
-      }
+      renderPatternFrame(activePattern, ctx, coords, patternBuf);
     } catch (e) {
-      useAppStore.getState().setPatternError(String(e));
-      useAppStore.getState().setActivePattern(null);
+      store.setPatternError(String(e));
+      store.setActivePattern(null);
       return;
     }
 
-    // Build duty buffer (brightness-applied, pre-gamma) for power estimate.
-    // This matches what the strip's LED dies actually PWM at.
-    const brightness = colorCfg.brightness;
-    const n3 = count * 3;
-    for (let i = 0; i < n3; i++) {
-      const v = patternBuf[i] * brightness;
-      dutyBuf[i] = v > 255 ? 255 : v;
-    }
-
+    // Power estimate wants a brightness-scaled buffer; gamma is perceptual
+    // so the LED dies see linear duty, not gamma-shaped.
+    computeDuty(patternBuf, colorCfg.brightness, dutyBuf);
     const pre = estimatePower(dutyBuf, powerCfg);
     const ablScale = pre.scale;
 
-    // Bake the final floats in one pass (brightness + gamma + ABL + shuffle).
+    // One-pass bake: float output always, stream output only when a
+    // transport is connected.
     const ic = mesh.instanceColor;
     const floatOut = ic.array as Float32Array;
-    bakeLinearFloats(patternBuf, floatOut, colorCfg, gammaLutRef.current.lut, ablScale);
+    const connected = transportManager.connected;
+    bakeFrame(
+      patternBuf,
+      colorCfg,
+      gammaLutRef.current.lut,
+      ablScale,
+      connected ? addressMap : null,
+      floatOut,
+      connected ? streamBuf : null,
+    );
     ic.needsUpdate = true;
+    if (connected) transportManager.trySend(streamBuf, outputCfg);
 
-    // Hardware stream. Only produced + sent when a transport is live so
-    // the simulator-only path stays cheap.
-    if (transportManager.connected) {
-      bakeStreamBytes(patternBuf, streamBuf, colorCfg, gammaLutRef.current.lut, ablScale, addressMap);
-      transportManager.trySend(streamBuf, useAppStore.getState().output);
-    }
-
-    // Throttled live-power push. The values we report are post-ABL — what
-    // the strip actually draws — so the readout matches reality when ABL
-    // is limiting.
+    // Throttled post-ABL power push.
     if ((clock.current.frame % POWER_PUSH_INTERVAL) === 0) {
-      useAppStore.getState().setPowerLive({
+      store.setPowerLive({
         amps: pre.amps * ablScale,
         watts: pre.watts * ablScale,
         scale: ablScale,

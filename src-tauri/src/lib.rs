@@ -127,7 +127,6 @@ fn wled_send(
     let mut guard = udp_state.0.lock().map_err(|e| e.to_string())?;
     if guard.is_none() {
         let sock = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-        sock.set_nonblocking(false).ok();
         *guard = Some(sock);
     }
     let sock = guard.as_ref().unwrap();
