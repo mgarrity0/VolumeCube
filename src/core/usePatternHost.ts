@@ -3,12 +3,11 @@ import { useAppStore } from '../state/store';
 import { mergeParamValues } from './patternApi';
 import {
   debounce,
-  getProjectRoot,
+  getPatternsRoot,
   isTauri,
   listPatterns,
   loadPattern,
   onPatternsChanged,
-  patternsDirFor,
   startWatching,
 } from './patternRuntime';
 
@@ -62,9 +61,9 @@ export function usePatternHost() {
 
     (async () => {
       try {
-        const root = await getProjectRoot();
+        const dir = await getPatternsRoot();
         await refreshList();
-        await startWatching(patternsDirFor(root));
+        await startWatching(dir);
         unlisten = await onPatternsChanged(handleChange);
       } catch (e) {
         setError(`pattern host init: ${String(e)}`);

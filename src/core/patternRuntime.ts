@@ -1,7 +1,8 @@
-// Pattern loader + hot-reload wiring (adapted from Orbiter).
+// Pattern loader + hot-reload wiring.
 //
 // Flow:
-//   1. Rust side `list_patterns` enumerates {project_root}/patterns/**/*.{js,mjs}.
+//   1. Rust side `list_patterns` enumerates the resolved patterns dir
+//      (repo/patterns in dev, app_data_dir/patterns in prod).
 //   2. Rust side `read_pattern` returns file text.
 //   3. We wrap the text in a Blob, create an object URL, and dynamic-import
 //      that URL. Each reload gets a fresh URL so module caching never bites.
@@ -73,15 +74,13 @@ export async function onPatternsChanged(
   );
 }
 
-export async function getProjectRoot(): Promise<string> {
-  return await invoke<string>('project_root');
-}
-
-export function patternsDirFor(projectRoot: string): string {
-  const sep = projectRoot.includes('\\') ? '\\' : '/';
-  return projectRoot.endsWith(sep)
-    ? `${projectRoot}patterns`
-    : `${projectRoot}${sep}patterns`;
+/**
+ * Absolute path of the patterns directory the backend is watching and
+ * reading from. Dev mode returns the repo's patterns/; shipped binary
+ * returns the user-writable <app_data_dir>/patterns.
+ */
+export async function getPatternsRoot(): Promise<string> {
+  return await invoke<string>('patterns_root');
 }
 
 // ---- Debouncer helper for the file-change handler ----
