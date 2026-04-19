@@ -285,4 +285,4 @@ Inside `ctx.utils`:
 
 ## License
 
-TBD.
+MIT — see [LICENSE](./LICENSE).
