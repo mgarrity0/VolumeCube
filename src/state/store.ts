@@ -47,9 +47,16 @@ export type AppState = {
   cameraPreset: CameraPreset;
   structureMode: StructureMode;
   showWiringPath: boolean;
+  showShortcuts: boolean;
+  // Monotonic token bumped by keyboard "S" shortcut or toolbar button;
+  // the <Cube /> component watches this and grabs the GL canvas on the
+  // next frame. Avoids passing refs through the R3F boundary.
+  snapshotToken: number;
   setCameraPreset: (p: CameraPreset) => void;
   setStructureMode: (m: StructureMode) => void;
   setShowWiringPath: (v: boolean) => void;
+  setShowShortcuts: (v: boolean) => void;
+  requestSnapshot: () => void;
 
   // Pattern
   pattern: PatternState;
@@ -58,6 +65,14 @@ export type AppState = {
   setPatternError: (err: string | null) => void;
   setParamValues: (name: string, values: Record<string, any>) => void;
   patchParamValue: (name: string, key: string, value: any) => void;
+
+  // Param presets — saved per-pattern named snapshots of paramValues.
+  // Session-only (no localStorage) — presets vanish on app restart. We'd
+  // plumb these through Tauri fs if longevity becomes a want.
+  presets: Record<string, Record<string, Record<string, any>>>;
+  savePreset: (pattern: string, name: string) => void;
+  deletePreset: (pattern: string, name: string) => void;
+  applyPreset: (pattern: string, name: string) => void;
 
   // Color pipeline
   color: ColorConfig;
@@ -93,9 +108,13 @@ export const useAppStore = create<AppState>((set) => ({
   cameraPreset: 'orbit',
   structureMode: 'ghost',
   showWiringPath: false,
+  showShortcuts: false,
+  snapshotToken: 0,
   setCameraPreset: (p) => set({ cameraPreset: p }),
   setStructureMode: (m) => set({ structureMode: m }),
   setShowWiringPath: (v) => set({ showWiringPath: v }),
+  setShowShortcuts: (v) => set({ showShortcuts: v }),
+  requestSnapshot: () => set((s) => ({ snapshotToken: s.snapshotToken + 1 })),
 
   pattern: {
     available: [],
@@ -134,6 +153,35 @@ export const useAppStore = create<AppState>((set) => ({
         },
       },
     })),
+
+  presets: {},
+  savePreset: (pattern, name) =>
+    set((s) => {
+      const values = s.pattern.paramValues[pattern] ?? {};
+      return {
+        presets: {
+          ...s.presets,
+          [pattern]: { ...(s.presets[pattern] ?? {}), [name]: { ...values } },
+        },
+      };
+    }),
+  deletePreset: (pattern, name) =>
+    set((s) => {
+      const forPattern = { ...(s.presets[pattern] ?? {}) };
+      delete forPattern[name];
+      return { presets: { ...s.presets, [pattern]: forPattern } };
+    }),
+  applyPreset: (pattern, name) =>
+    set((s) => {
+      const values = s.presets[pattern]?.[name];
+      if (!values) return s;
+      return {
+        pattern: {
+          ...s.pattern,
+          paramValues: { ...s.pattern.paramValues, [pattern]: { ...values } },
+        },
+      };
+    }),
 
   color: defaultColorConfig,
   patchColor: (patch) => set((s) => ({ color: { ...s.color, ...patch } })),

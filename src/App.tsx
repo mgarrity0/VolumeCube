@@ -6,11 +6,14 @@ import { PowerPanel } from './components/Power/PowerPanel';
 import { AudioPanel } from './components/Audio/AudioPanel';
 import { OutputPanel } from './components/Output/OutputPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ShortcutsHelp } from './components/ShortcutsHelp';
 import { usePatternHost } from './core/usePatternHost';
+import { useKeyboardShortcuts } from './core/keyboardShortcuts';
 import './App.css';
 
 export default function App() {
   usePatternHost();
+  useKeyboardShortcuts();
 
   return (
     <main className="app-root">
@@ -32,6 +35,7 @@ export default function App() {
           <ErrorBoundary><OutputPanel /></ErrorBoundary>
         </aside>
       </section>
+      <ShortcutsHelp />
     </main>
   );
 }

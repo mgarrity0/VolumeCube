@@ -117,17 +117,77 @@ export function ParamsPanel() {
           <strong>{active.displayName}</strong> exposes no params.
         </p>
       ) : (
-        entries.map(([key, spec]) => (
-          <ParamControl
-            key={key}
-            label={labelFor(key, spec)}
-            spec={spec}
-            value={values[key] ?? (spec as any).default}
-            onChange={(v) => patchParamValue(active.name, key, v)}
-          />
-        ))
+        <>
+          <PresetRow patternName={active.name} />
+          {entries.map(([key, spec]) => (
+            <ParamControl
+              key={key}
+              label={labelFor(key, spec)}
+              spec={spec}
+              value={values[key] ?? (spec as any).default}
+              onChange={(v) => patchParamValue(active.name, key, v)}
+            />
+          ))}
+        </>
       )}
     </section>
+  );
+}
+
+// Presets dropdown + Save/Delete buttons for the active pattern. Session-
+// only storage — we trade persistence for the simplicity of no Tauri-fs
+// round trip and no schema-migration worry when a pattern's params change.
+function PresetRow({ patternName }: { patternName: string }) {
+  const forPattern = useAppStore((s) => s.presets[patternName]);
+  const savePreset = useAppStore((s) => s.savePreset);
+  const deletePreset = useAppStore((s) => s.deletePreset);
+  const applyPreset = useAppStore((s) => s.applyPreset);
+
+  const names = forPattern ? Object.keys(forPattern).sort() : [];
+
+  const onSave = () => {
+    const name = window.prompt('Preset name:');
+    if (!name) return;
+    savePreset(patternName, name.trim());
+  };
+
+  const onSelect = (name: string) => {
+    if (!name) return;
+    applyPreset(patternName, name);
+  };
+
+  const onDelete = () => {
+    if (names.length === 0) return;
+    const name = window.prompt(
+      `Delete which preset?\n\n${names.join('\n')}`,
+      names[0],
+    );
+    if (!name) return;
+    deletePreset(patternName, name.trim());
+  };
+
+  return (
+    <div className="preset-row">
+      <select
+        value=""
+        onChange={(e) => onSelect(e.target.value)}
+        disabled={names.length === 0}
+        title={names.length === 0 ? 'No presets saved' : 'Apply preset'}
+      >
+        <option value="">
+          {names.length === 0 ? '(no presets)' : 'Apply preset…'}
+        </option>
+        {names.map((n) => (
+          <option key={n} value={n}>{n}</option>
+        ))}
+      </select>
+      <button onClick={onSave} title="Save current params as a named preset">
+        Save
+      </button>
+      <button onClick={onDelete} disabled={names.length === 0} title="Delete a saved preset">
+        Delete
+      </button>
+    </div>
   );
 }
 

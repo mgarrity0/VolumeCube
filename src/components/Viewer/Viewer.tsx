@@ -7,6 +7,7 @@ import { useAppStore, StructureMode, CameraPreset } from '../../state/store';
 import { Cube } from './Cube';
 import { StructureOverlay } from './StructureOverlay';
 import { WiringPathOverlay } from './WiringPathOverlay';
+import { SnapshotHandler } from './SnapshotHandler';
 import { ErrorBoundary } from '../ErrorBoundary';
 import {
   CAM_PRESETS,
@@ -89,13 +90,28 @@ function CameraController() {
 
 function Toolbar() {
   const setPreset = useAppStore((s) => s.setCameraPreset);
+  const setShow = useAppStore((s) => s.setShowShortcuts);
+  const requestSnapshot = useAppStore((s) => s.requestSnapshot);
   return (
     <div className="viewer-toolbar">
       {PRESET_BUTTONS.map((p) => (
-        <button key={p.key} onClick={() => setPreset(p.key)}>
+        <button key={p.key} onClick={() => setPreset(p.key)} title={`Camera: ${p.label}`}>
           {p.label}
         </button>
       ))}
+      <button
+        onClick={() => requestSnapshot()}
+        title="Save snapshot PNG (S)"
+      >
+        Snapshot
+      </button>
+      <button
+        onClick={() => setShow(true)}
+        title="Keyboard shortcuts (?)"
+        className="viewer-help-btn"
+      >
+        ? Shortcuts
+      </button>
     </div>
   );
 }
@@ -122,7 +138,9 @@ export function Viewer() {
   return (
     <div className="viewer">
       <Toolbar />
-      <div className="viewer-hint">Shift+drag to orbit</div>
+      <div className="viewer-hint">
+        Shift+drag to orbit &middot; <kbd>?</kbd> for shortcuts
+      </div>
       <ModeToggle />
       <div className="viewer-canvas-wrap">
         <ErrorBoundary
@@ -136,11 +154,16 @@ export function Viewer() {
         >
           <Canvas
             camera={{ position: DEFAULT_CAM.pos, fov: 50, near: 0.05, far: 200 }}
-            gl={{ antialias: true, alpha: false }}
+            // preserveDrawingBuffer lets the Snapshot button grab pixels via
+            // canvas.toDataURL at any time — without it, the back buffer
+            // clears between frames and screenshots come back blank. The
+            // GPU cost is negligible for this scene size.
+            gl={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
             dpr={[1, 2]}
           >
             <color attach="background" args={['#000']} />
             <CameraController />
+            <SnapshotHandler />
             <Cube />
             <StructureOverlay />
             <WiringPathOverlay />

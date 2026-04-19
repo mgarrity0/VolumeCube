@@ -120,6 +120,20 @@ input[type="range"] {
   pointer-events: none;
   z-index: 2;
 }
+.viewer-hint kbd {
+  display: inline-block;
+  padding: 0 4px;
+  margin: 0 1px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 3px;
+  color: #c0c0c0;
+  font-family: inherit;
+  font-size: 10px;
+}
+.viewer-help-btn {
+  margin-left: 8px;
+}
 .viewer-bottom-left {
   position: absolute;
   bottom: 12px;
@@ -423,4 +437,104 @@ input[type="checkbox"] {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Keyboard shortcut help overlay */
+.shortcuts-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 24px;
+}
+.shortcuts-modal {
+  background: #0e0e0e;
+  border: 1px solid #242424;
+  border-radius: 8px;
+  padding: 22px 26px;
+  min-width: 420px;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+}
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #1e1e1e;
+}
+.shortcuts-header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #e6e6e6;
+}
+.shortcuts-close {
+  font-size: 12px;
+}
+.shortcuts-group {
+  margin-bottom: 14px;
+}
+.shortcuts-group-title {
+  color: #6a6a6a;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.shortcuts-table td {
+  padding: 4px 6px;
+  color: #c0c0c0;
+}
+.shortcuts-table td.shortcuts-key {
+  width: 64px;
+  text-align: right;
+}
+.shortcuts-table kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 2px 6px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  color: #dce5ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+.shortcuts-footer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #1e1e1e;
+  color: #6a6a6a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Preset row in ParamsPanel */
+.preset-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.preset-row select {
+  width: 100%;
+}
+.preset-row button {
+  padding: 4px 8px;
+  font-size: 11px;
 }

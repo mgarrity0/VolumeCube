@@ -276,6 +276,25 @@ fn write_export(rel_path: String, contents: String, app: AppHandle) -> Result<St
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Write a snapshot PNG the JS side captured from the WebGL canvas.
+/// `abs_path` comes from a Tauri file-picker dialog so the user has already
+/// authorized the location — we just ensure the parent dir exists and
+/// stream bytes in. Rejects paths that don't look like an image so a
+/// stray command invocation can't clobber arbitrary files.
+#[tauri::command]
+fn snapshot_write(abs_path: String, bytes: Vec<u8>) -> Result<String, String> {
+    let lower = abs_path.to_lowercase();
+    if !(lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")) {
+        return Err("snapshot path must end in .png, .jpg, or .jpeg".into());
+    }
+    let path = PathBuf::from(&abs_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -295,6 +314,7 @@ pub fn run() {
             serial_send,
             serial_close,
             write_export,
+            snapshot_write,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
