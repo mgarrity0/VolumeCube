@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useAppStore } from '../../state/store';
 import { buildCoords, ledCount, spacing } from '../../core/cubeGeometry';
 import type { RenderContext } from '../../core/patternApi';
@@ -11,8 +11,9 @@ import { audioEngine } from '../../core/audio';
 import { buildAddressMap } from '../../core/wiring';
 import { transportManager } from '../../core/transports';
 import { renderPatternFrame } from '../../core/patternRender';
+import { createLedPointsMaterial } from './ledPointsMaterial';
 
-// InstancedMesh of all N³ LEDs + per-frame pattern rendering.
+// Points primitive + per-frame pattern rendering.
 //
 // Per-frame pipeline:
 //   1. audioEngine.update() — fresh FFT bins + beat flag for ctx.audio
@@ -20,32 +21,56 @@ import { renderPatternFrame } from '../../core/patternRender';
 //   3. computeDuty → dutyBuf (brightness-scaled) for power estimate.
 //   4. estimatePower → pre-ABL amps + scale factor.
 //   5. bakeFrame — brightness + gamma + ABL + color-order shuffle written
-//      into the Float32 instanceColor buffer and, if a transport is live,
+//      into the Float32 color attribute and, if a transport is live,
 //      also into the stream-ordered byte buffer in the same pass.
 //
 // Hot state is read once per frame via a single getState() snapshot so
 // unrelated UI changes don't force this component to re-render mid-stream.
 
-const DUMMY = new THREE.Object3D();
-const DUMMY_COLOR = new THREE.Color();
-
 // How often to push powerLive into Zustand (every Nth frame). Updates
 // the panel readouts at ~7.5 Hz at 60 fps.
 const POWER_PUSH_INTERVAL = 8;
 
+// LED billboard diameter as a fraction of inter-LED spacing. A value
+// < 1 leaves visible gaps between LEDs (reads as a grid) while > 1
+// lets halos overlap (reads as a continuous volume).
+const LED_SIZE_FACTOR = 0.55;
+
 export function Cube() {
   const cube = useAppStore((s) => s.cube);
   const wiring = useAppStore((s) => s.wiring);
-  const ref = useRef<THREE.InstancedMesh>(null);
+  const pointsRef = useRef<THREE.Points>(null);
+  const { size, camera } = useThree();
 
   const coords = useMemo(() => buildCoords(cube), [cube]);
   const count = ledCount(cube);
-  const radius = Math.max(0.005, spacing(cube) * 0.28);
+  const sizeMeters = Math.max(0.005, spacing(cube) * LED_SIZE_FACTOR);
 
   const patternBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const dutyBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const streamBuf = useMemo(() => new Uint8Array(count * 3), [count]);
   const addressMap = useMemo(() => buildAddressMap(wiring, cube.N), [wiring, cube.N]);
+
+  // Shader material + its uniforms live outside React so the per-frame
+  // loop can touch them without causing re-renders. Rebuilt only on cube
+  // rebuild so uSizeMeters tracks the new spacing.
+  const material = useMemo(() => createLedPointsMaterial(sizeMeters), [sizeMeters]);
+
+  // Geometry with position + color buffer attributes. Pre-allocated and
+  // updated in place every frame — we never reallocate in the hot path.
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(coords.positions.slice(), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    return g;
+  }, [coords, count]);
+
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      material.dispose();
+    };
+  }, [geometry, material]);
 
   // Cached gamma LUT — rebuilt only when colorCfg.gamma changes.
   const gammaLutRef = useRef<{ gamma: number; lut: Float32Array }>({
@@ -59,31 +84,35 @@ export function Cube() {
     setupCookie: -1,
   });
 
-  // Seed positions + warm-white default when the cube rebuilds.
+  // Seed a warm-white default color on cube rebuild so the points are
+  // visible before the first pattern frame runs.
   useEffect(() => {
-    const mesh = ref.current;
-    if (!mesh) return;
-    const { positions } = coords;
+    const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
+    const arr = colorAttr.array as Float32Array;
     for (let i = 0; i < count; i++) {
-      DUMMY.position.set(
-        positions[i * 3 + 0],
-        positions[i * 3 + 1],
-        positions[i * 3 + 2],
-      );
-      DUMMY.updateMatrix();
-      mesh.setMatrixAt(i, DUMMY.matrix);
-      DUMMY_COLOR.setRGB(1.0, 0.95, 0.85);
-      mesh.setColorAt(i, DUMMY_COLOR);
+      arr[i * 3 + 0] = 1.0;
+      arr[i * 3 + 1] = 0.95;
+      arr[i * 3 + 2] = 0.85;
     }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    mesh.count = count;
+    colorAttr.needsUpdate = true;
     clock.current.setupCookie = -1;
-  }, [coords, count]);
+  }, [geometry, count]);
+
+  // Recompute uPxPerMeter whenever the viewport size or the camera FOV
+  // changes. PerspectiveCamera.fov is in degrees; the formula is the
+  // standard perspective projection ratio.
+  useEffect(() => {
+    const persp = camera as THREE.PerspectiveCamera;
+    const fovRad = (persp.fov * Math.PI) / 180;
+    const pxPerMeter = (size.height * 0.5) / Math.tan(fovRad * 0.5);
+    material.uniforms.uPxPerMeter.value = pxPerMeter;
+    material.uniforms.uSizeMeters.value = sizeMeters;
+  }, [size.height, camera, material, sizeMeters]);
 
   useFrame((state, delta) => {
-    const mesh = ref.current;
-    if (!mesh || !mesh.instanceColor) return;
+    const points = pointsRef.current;
+    if (!points) return;
+    const colorAttr = geometry.getAttribute('color') as THREE.BufferAttribute;
 
     const nowMs = performance.now();
     audioEngine.update(nowMs);
@@ -161,8 +190,7 @@ export function Cube() {
 
     // One-pass bake: float output always, stream output only when a
     // transport is connected.
-    const ic = mesh.instanceColor;
-    const floatOut = ic.array as Float32Array;
+    const floatOut = colorAttr.array as Float32Array;
     const connected = transportManager.connected;
     bakeFrame(
       patternBuf,
@@ -173,7 +201,7 @@ export function Cube() {
       floatOut,
       connected ? streamBuf : null,
     );
-    ic.needsUpdate = true;
+    colorAttr.needsUpdate = true;
     if (connected) transportManager.trySend(streamBuf, outputCfg);
 
     // Throttled power push — both pre-ABL (what the pattern wanted) and
@@ -192,13 +220,6 @@ export function Cube() {
   });
 
   return (
-    <instancedMesh
-      ref={ref}
-      args={[undefined, undefined, count]}
-      frustumCulled={false}
-    >
-      <sphereGeometry args={[radius, 8, 6]} />
-      <meshBasicMaterial toneMapped={false} />
-    </instancedMesh>
+    <points ref={pointsRef} geometry={geometry} material={material} frustumCulled={false} />
   );
 }
