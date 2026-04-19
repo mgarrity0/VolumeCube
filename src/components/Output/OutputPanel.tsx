@@ -55,6 +55,7 @@ export function OutputPanel() {
       if (
         prev.fps !== live.fps ||
         prev.droppedFrames !== live.droppedFrames ||
+        prev.crcMismatches !== live.crcMismatches ||
         prev.connected !== live.connected ||
         prev.lastError !== live.lastError
       ) {
@@ -294,6 +295,18 @@ export function OutputPanel() {
         <div className="power-readout" style={{ marginTop: 10 }}>
           <div>FPS<strong>{stats.fps}</strong></div>
           <div>Dropped<strong>{stats.droppedFrames}</strong></div>
+        </div>
+      )}
+      {output.kind === 'serial' && stats.connected && (
+        <div className="stat-line">
+          CRC mismatches (firmware):{' '}
+          <strong
+            style={{
+              color: stats.crcMismatches > 0 ? '#ff9060' : undefined,
+            }}
+          >
+            {stats.crcMismatches}
+          </strong>
         </div>
       )}
       {stats.lastError && <div className="library-error">{stats.lastError}</div>}

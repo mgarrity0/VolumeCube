@@ -80,9 +80,17 @@ export function PowerPanel() {
         <div>Watts<strong>{fmtWatts(live.watts)}</strong></div>
       </div>
       {ablActive && (
-        <div className="stat-line">
-          ABL active — scale <strong>{(live.scale * 100).toFixed(0)}%</strong>
-        </div>
+        <>
+          <div className="power-readout">
+            <div>Raw A<strong>{fmtAmps(live.rawAmps)}</strong></div>
+            <div>Raw W<strong>{fmtWatts(live.rawWatts)}</strong></div>
+          </div>
+          <div className="stat-line">
+            ABL active — scale <strong>{(live.scale * 100).toFixed(0)}%</strong>{' '}
+            (saved{' '}
+            <strong>{fmtAmps(live.rawAmps - live.amps)}</strong>)
+          </div>
+        </>
       )}
     </section>
   );

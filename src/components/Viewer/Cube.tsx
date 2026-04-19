@@ -176,11 +176,15 @@ export function Cube() {
     ic.needsUpdate = true;
     if (connected) transportManager.trySend(streamBuf, outputCfg);
 
-    // Throttled post-ABL power push.
+    // Throttled power push — both pre-ABL (what the pattern wanted) and
+    // post-ABL (what the strip actually pulls) so the panel can show the
+    // delta the limiter absorbed.
     if ((clock.current.frame % POWER_PUSH_INTERVAL) === 0) {
       store.setPowerLive({
         amps: pre.amps * ablScale,
         watts: pre.watts * ablScale,
+        rawAmps: pre.amps,
+        rawWatts: pre.watts,
         scale: ablScale,
         overBudget: pre.overBudget,
       });

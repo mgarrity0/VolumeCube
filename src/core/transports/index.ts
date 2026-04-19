@@ -43,6 +43,9 @@ export const defaultOutputConfig: OutputConfig = {
 export type OutputStats = {
   fps: number;
   droppedFrames: number;
+  // Cumulative CRC mismatches reported by the firmware (serial transport
+  // only). Stays at 0 for transports that don't report status back.
+  crcMismatches: number;
   connected: boolean;
   lastError: string | null;
 };
@@ -50,6 +53,7 @@ export type OutputStats = {
 export const defaultOutputStats: OutputStats = {
   fps: 0,
   droppedFrames: 0,
+  crcMismatches: 0,
   connected: false,
   lastError: null,
 };
@@ -81,6 +85,11 @@ class TransportManager {
   }
 
   getStats(): OutputStats {
+    // Let the current transport refresh its own stat fields (e.g. serial
+    // CRC mismatches come out of firmware status frames parsed per send).
+    if (this.current instanceof SerialTransport) {
+      this.stats.crcMismatches = this.current.crcMismatches;
+    }
     return this.stats;
   }
 
@@ -113,7 +122,12 @@ class TransportManager {
     }
     this.current = t;
     this.sendTimes = [];
-    this.setStats({ connected: true, lastError: null, droppedFrames: 0 });
+    this.setStats({
+      connected: true,
+      lastError: null,
+      droppedFrames: 0,
+      crcMismatches: 0,
+    });
   }
 
   async disconnect(): Promise<void> {

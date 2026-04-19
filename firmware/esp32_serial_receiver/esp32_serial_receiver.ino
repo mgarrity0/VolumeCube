@@ -9,6 +9,11 @@
 //   [rgb bytes ...]        stream-ordered RGB triples (3 × LED_COUNT)
 //   [crc_hi][crc_lo]       CRC-16/CCITT-FALSE over the rgb bytes
 //
+// Status responses (emitted back to the host):
+//   [0xFE][0xED][cnt_hi][cnt_lo]   rolling 16-bit CRC-mismatch count
+//     — sent only when a CRC mismatch happens (the count is cumulative
+//     since boot so the host can compute deltas and detect wrap-around).
+//
 // The host is already applying brightness + gamma + color-order shuffle
 // + wiring address map, so this firmware is intentionally dumb — just
 // memcpy the payload into the FastLED buffer and call show().
@@ -52,6 +57,8 @@ static uint16_t bytesRead = 0;
 static uint8_t crcHiByte = 0;
 static uint16_t crcRecv = 0;
 static uint8_t buf[FRAME_BYTES];
+// Rolling CRC-mismatch count since boot. Wraps naturally at 65535.
+static uint16_t crcMismatches = 0;
 
 // CRC-16/CCITT-FALSE. Poly 0x1021, init 0xFFFF, no reflection, no xorout.
 static uint16_t crc16Ccitt(const uint8_t *data, size_t n) {
@@ -111,9 +118,17 @@ void loop() {
         if (crc16Ccitt(buf, frameLen) == crcRecv) {
           memcpy((uint8_t *)leds, buf, frameLen);
           FastLED.show();
+        } else {
+          // Bad CRC — drop the frame and tell the host so it can
+          // surface a mismatch counter in the UI.
+          crcMismatches++;
+          uint8_t report[4] = {
+            0xFE, 0xED,
+            (uint8_t)(crcMismatches >> 8),
+            (uint8_t)(crcMismatches & 0xFF),
+          };
+          Serial.write(report, sizeof(report));
         }
-        // CRC mismatches silently drop the frame; the next magic
-        // prefix re-syncs us.
         state = WAIT_MAGIC1;
         break;
     }

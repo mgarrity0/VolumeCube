@@ -26,8 +26,13 @@ export type PatternState = {
 };
 
 export type PowerLive = {
+  // Post-ABL values — what the strip actually pulls after the limiter ran.
   amps: number;
   watts: number;
+  // Pre-ABL values — what the pattern wanted to draw before clamping.
+  // Equal to amps/watts when ABL is inactive.
+  rawAmps: number;
+  rawWatts: number;
   scale: number;
   overBudget: boolean;
 };
@@ -187,7 +192,7 @@ export const useAppStore = create<AppState>((set) => ({
   patchColor: (patch) => set((s) => ({ color: { ...s.color, ...patch } })),
 
   power: defaultPowerConfig,
-  powerLive: { amps: 0, watts: 0, scale: 1, overBudget: false },
+  powerLive: { amps: 0, watts: 0, rawAmps: 0, rawWatts: 0, scale: 1, overBudget: false },
   patchPower: (patch) => set((s) => ({ power: { ...s.power, ...patch } })),
   setPowerLive: (live) => set({ powerLive: live }),
 

@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::UdpSocket;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -243,11 +243,28 @@ fn serial_open(
 fn serial_send(
     bytes: Vec<u8>,
     serial_state: State<'_, SerialState>,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     let mut guard = serial_state.0.lock().map_err(|e| e.to_string())?;
     let port = guard.as_mut().ok_or("serial port not open")?;
     port.write_all(&bytes).map_err(|e| e.to_string())?;
-    Ok(())
+
+    // Drain any status bytes the firmware emitted since the last send.
+    // We read only what's already buffered — `bytes_to_read()` is truly
+    // non-blocking, so a quiet firmware (no CRC mismatches) costs nothing.
+    // The 256-byte cap bounds the worst-case per-frame IPC payload.
+    let pending = port.bytes_to_read().unwrap_or(0) as usize;
+    if pending == 0 {
+        return Ok(Vec::new());
+    }
+    let to_read = pending.min(256);
+    let mut buf = vec![0u8; to_read];
+    match port.read(&mut buf) {
+        Ok(n) => {
+            buf.truncate(n);
+            Ok(buf)
+        }
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 #[tauri::command]
