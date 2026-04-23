@@ -9,20 +9,20 @@ export const params = {
   hueSpin:  { type: 'range', min: 0,  max: 1,   step: 0.01, default: 0.3 },
 };
 
-function randomEntry(N) {
-  // Pick one of the six faces as entry; velocity points into the cube.
+function randomEntry(Nx, Ny, Nz) {
+  // Pick one of the six faces as entry; velocity points into the volume.
   const face = (Math.random() * 6) | 0;
-  const x = Math.random() * (N - 1);
-  const y = Math.random() * (N - 1);
-  const z = Math.random() * (N - 1);
+  const rx = Math.random() * (Nx - 1);
+  const ry = Math.random() * (Ny - 1);
+  const rz = Math.random() * (Nz - 1);
   let px, py, pz, dx, dy, dz;
   switch (face) {
-    case 0: px = -1;    py = y;  pz = z;  dx =  1; dy = 0; dz = 0; break;
-    case 1: px = N;     py = y;  pz = z;  dx = -1; dy = 0; dz = 0; break;
-    case 2: px = x;  py = -1;    pz = z;  dx = 0; dy =  1; dz = 0; break;
-    case 3: px = x;  py = N;     pz = z;  dx = 0; dy = -1; dz = 0; break;
-    case 4: px = x;  py = y;  pz = -1;    dx = 0; dy = 0; dz =  1; break;
-    default: px = x; py = y;  pz = N;     dx = 0; dy = 0; dz = -1; break;
+    case 0: px = -1;    py = ry; pz = rz; dx =  1; dy = 0; dz = 0; break;
+    case 1: px = Nx;    py = ry; pz = rz; dx = -1; dy = 0; dz = 0; break;
+    case 2: px = rx; py = -1;    pz = rz; dx = 0; dy =  1; dz = 0; break;
+    case 3: px = rx; py = Ny;    pz = rz; dx = 0; dy = -1; dz = 0; break;
+    case 4: px = rx; py = ry; pz = -1;    dx = 0; dy = 0; dz =  1; break;
+    default: px = rx; py = ry; pz = Nz;   dx = 0; dy = 0; dz = -1; break;
   }
   // Add a perpendicular drift so streaks aren't purely axis-aligned.
   dx += (Math.random() - 0.5) * 0.6;
@@ -36,15 +36,15 @@ export default class Meteors {
   static name = 'Meteors';
 
   setup(ctx) {
-    this.N = ctx.N;
     this.ms = [];
-    for (let i = 0; i < ctx.params.count; i++) this.ms.push(randomEntry(ctx.N));
+    for (let i = 0; i < ctx.params.count; i++) {
+      this.ms.push(randomEntry(ctx.Nx, ctx.Ny, ctx.Nz));
+    }
   }
 
   update(ctx) {
-    const { dt, params, N } = ctx;
-    if (this.N !== N) this.setup(ctx);
-    while (this.ms.length < params.count) this.ms.push(randomEntry(N));
+    const { dt, params, Nx, Ny, Nz } = ctx;
+    while (this.ms.length < params.count) this.ms.push(randomEntry(Nx, Ny, Nz));
     while (this.ms.length > params.count) this.ms.pop();
 
     for (let i = 0; i < this.ms.length; i++) {
@@ -54,14 +54,16 @@ export default class Meteors {
       m.z += m.vz * params.speed * dt;
       m.hue = (m.hue + params.hueSpin * dt) % 1;
       const pad = params.trailLen + 2;
-      if (m.x < -pad || m.x > N + pad || m.y < -pad || m.y > N + pad || m.z < -pad || m.z > N + pad) {
-        this.ms[i] = randomEntry(N);
+      if (m.x < -pad || m.x > Nx + pad ||
+          m.y < -pad || m.y > Ny + pad ||
+          m.z < -pad || m.z > Nz + pad) {
+        this.ms[i] = randomEntry(Nx, Ny, Nz);
       }
     }
   }
 
   render(ctx, out) {
-    const { N, params, utils } = ctx;
+    const { Nx, Ny, Nz, params, utils } = ctx;
     out.fill(0);
 
     const tailSteps = Math.max(2, Math.round(params.trailLen));
@@ -79,9 +81,9 @@ export default class Meteors {
           for (let dy = 0; dy <= 1; dy++) {
             for (let dz = 0; dz <= 1; dz++) {
               const xx = x0 + dx, yy = y0 + dy, zz = z0 + dz;
-              if (xx < 0 || xx >= N || yy < 0 || yy >= N || zz < 0 || zz >= N) continue;
+              if (xx < 0 || xx >= Nx || yy < 0 || yy >= Ny || zz < 0 || zz >= Nz) continue;
               const w = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz) * intensity;
-              const idx = (xx * N + yy) * N + zz;
+              const idx = (xx * Ny + yy) * Nz + zz;
               out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + hr * w);
               out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + hg * w);
               out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + hb * w);

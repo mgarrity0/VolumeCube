@@ -1,21 +1,20 @@
-// Hilbert Curve — animated trace of a space-filling curve through the cube.
+// Hilbert Curve — animated trace of a true 3D space-filling curve.
 //
-// Implementation note: the canonical 3D Hilbert curve is a pain to
-// hand-roll, so this uses a per-Z-layer 2D Hilbert with alternating
-// traversal direction. The first Z-slice walks the standard 2D Hilbert
-// forward; the next slice walks it in reverse so the last cell of one
-// slice is adjacent to the first cell of the next — keeping the overall
-// path continuous. Not the textbook 3D Hilbert but still fully space-
-// filling and locality-preserving, and the fractal self-similarity is
-// beautifully visible as the head animates along.
+// Uses Skilling's transposed-axes algorithm ("Programming the Hilbert
+// curve", 2004) to generate the canonical 3D Hilbert curve through a
+// 2^order cube. Unlike a per-layer 2D Hilbert, this genuinely interleaves
+// all three axes — each recursion subdivides the volume into 8 octants
+// visited in a Gray-code order, so the curve probes depth as it walks
+// rather than filling one slab at a time.
 //
-// For cubes whose side isn't a power of two, we generate the 2D Hilbert
-// for the next power of 2 ≥ N and skip out-of-bounds cells while walking
-// the path — continuity is preserved on the kept cells.
+// For non-power-of-two / non-cubic dimensions we generate the curve on
+// the next-power-of-2 bounding cube and drop cells that fall outside
+// (Nx, Ny, Nz). Hilbert locality keeps skips clustered, so the kept path
+// is mostly continuous with only occasional small jumps — fine visually.
 //
 // The `showFull` toggle paints the whole curve at low brightness as a
-// rainbow ramp keyed to path index, so the structure is legible at a
-// glance even without the animated head.
+// rainbow ramp keyed to path index, so the 3D fractal structure is
+// legible at a glance even without the animated head.
 
 export const params = {
   speed:     { type: 'range', min: 1,  max: 400, step: 1, default: 80, label: 'Cells / sec' },
@@ -26,36 +25,51 @@ export const params = {
   fullLevel: { type: 'range', min: 0, max: 0.4, step: 0.005, default: 0.08, label: 'Curve brightness' },
 };
 
-// 2D Hilbert index → (x, y) on a size×size grid. Classic Wikipedia impl.
-function d2xy(size, d) {
-  let rx, ry, t = d;
-  let x = 0, y = 0;
-  for (let s = 1; s < size; s *= 2) {
-    rx = 1 & (t >> 1);
-    ry = 1 & (t ^ rx);
-    if (ry === 0) {
-      if (rx === 1) { x = s - 1 - x; y = s - 1 - y; }
-      const tmp = x; x = y; y = tmp;
-    }
-    x += s * rx;
-    y += s * ry;
-    t >>= 2;
+// Skilling's Hilbert index → 3D axes.
+// d ∈ [0, 8^order); returns [x, y, z] ∈ [0, 2^order)³.
+// Consecutive d values produce adjacent (x,y,z) positions differing by
+// exactly one step on exactly one axis — the defining Hilbert property.
+function hilbertD2XYZ(d, order) {
+  // Unpack d into the "transposed" representation: b bits across 3 words,
+  // where the 3 bits at d's position (3i+2, 3i+1, 3i+0) become bit i of
+  // X[0], X[1], X[2] respectively.
+  let x = 0, y = 0, z = 0;
+  for (let i = 0; i < order; i++) {
+    const g = (d >> (i * 3)) & 7;
+    x |= ((g >> 2) & 1) << i;
+    y |= ((g >> 1) & 1) << i;
+    z |= ((g >> 0) & 1) << i;
   }
-  return [x, y];
+  // Gray decode.
+  const t0 = z >> 1;
+  z ^= y;
+  y ^= x;
+  x ^= t0;
+  // Undo the rotations/reflections applied at each recursion level.
+  // Skilling iterates the axes in reverse (z, y, x); the i=0 (x) case
+  // collapses to a no-op when X[i]&Q is false, so it's inlined.
+  const N = 1 << order;
+  for (let Q = 2; Q < N; Q <<= 1) {
+    const P = Q - 1;
+    if (z & Q) x ^= P;
+    else { const t = (x ^ z) & P; x ^= t; z ^= t; }
+    if (y & Q) x ^= P;
+    else { const t = (x ^ y) & P; x ^= t; y ^= t; }
+    if (x & Q) x ^= P;
+  }
+  return [x, y, z];
 }
 
-function buildPath(N) {
-  const order = Math.max(1, Math.ceil(Math.log2(Math.max(2, N))));
-  const size = 1 << order;
-  const plane = new Array(size * size);
-  for (let d = 0; d < size * size; d++) plane[d] = d2xy(size, d);
+function buildPath(Nx, Ny, Nz) {
+  // Hilbert curve needs a 2^order cube; pick order to cover the largest axis.
+  const maxDim = Math.max(Nx, Ny, Nz);
+  const order = Math.max(1, Math.ceil(Math.log2(Math.max(2, maxDim))));
+  const total = 1 << (order * 3);
   const path = [];
-  for (let y = 0; y < N; y++) {
-    // Alternate direction per Y-slice so consecutive slices link at a face.
-    const forward = (y % 2) === 0;
-    for (let k = 0; k < plane.length; k++) {
-      const [px, pz] = forward ? plane[k] : plane[plane.length - 1 - k];
-      if (px < N && pz < N) path.push((px * N + y) * N + pz);
+  for (let d = 0; d < total; d++) {
+    const [x, y, z] = hilbertD2XYZ(d, order);
+    if (x < Nx && y < Ny && z < Nz) {
+      path.push((x * Ny + y) * Nz + z);
     }
   }
   return path;
@@ -65,13 +79,13 @@ export default class HilbertCurve {
   static name = 'Hilbert Curve';
 
   setup(ctx) {
-    this.N = ctx.N;
-    this.path = buildPath(ctx.N);
+    this.Nx = ctx.Nx; this.Ny = ctx.Ny; this.Nz = ctx.Nz;
+    this.path = buildPath(ctx.Nx, ctx.Ny, ctx.Nz);
   }
 
   render(ctx, out) {
-    const { t, N, params, utils } = ctx;
-    if (this.N !== N || !this.path) this.setup(ctx);
+    const { t, Nx, Ny, Nz, params, utils } = ctx;
+    if (this.Nx !== Nx || this.Ny !== Ny || this.Nz !== Nz || !this.path) this.setup(ctx);
     const total = this.path.length;
     out.fill(0);
 

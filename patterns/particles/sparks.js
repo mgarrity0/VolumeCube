@@ -14,18 +14,18 @@ export const params = {
 export default class Sparks {
   static name = 'Sparks';
 
-  setup(ctx) {
-    this.N = ctx.N;
+  setup() {
     this.parts = [];
     this.spawnAcc = 0;
   }
 
-  spawn(N, params) {
-    const half = (N - 1) / 2;
+  spawn(Nx, Nz, params) {
+    const halfX = (Nx - 1) / 2;
+    const halfZ = (Nz - 1) / 2;
     this.parts.push({
-      x: half + (Math.random() - 0.5) * 0.5,
+      x: halfX + (Math.random() - 0.5) * 0.5,
       y: 0,
-      z: half + (Math.random() - 0.5) * 0.5,
+      z: halfZ + (Math.random() - 0.5) * 0.5,
       vx: (Math.random() - 0.5) * params.spread,
       vy: params.launch * (0.7 + Math.random() * 0.5),
       vz: (Math.random() - 0.5) * params.spread,
@@ -35,12 +35,11 @@ export default class Sparks {
   }
 
   update(ctx) {
-    const { dt, N, params } = ctx;
-    if (this.N !== N) this.setup(ctx);
+    const { dt, Nx, Ny, Nz, params } = ctx;
 
     this.spawnAcc += params.rate * dt;
     while (this.spawnAcc >= 1) {
-      this.spawn(N, params);
+      this.spawn(Nx, Nz, params);
       this.spawnAcc -= 1;
     }
 
@@ -51,14 +50,15 @@ export default class Sparks {
       p.y += p.vy * dt;
       p.z += p.vz * dt;
       p.age += dt;
-      if (p.age > p.life || p.y < -0.5 || p.x < -1 || p.x > N || p.z < -1 || p.z > N) {
+      if (p.age > p.life || p.y < -0.5 || p.y > Ny + 1 ||
+          p.x < -1 || p.x > Nx || p.z < -1 || p.z > Nz) {
         this.parts.splice(i, 1);
       }
     }
   }
 
   render(ctx, out) {
-    const { N, utils } = ctx;
+    const { Nx, Ny, Nz, utils } = ctx;
     out.fill(0);
 
     for (const p of this.parts) {
@@ -75,9 +75,9 @@ export default class Sparks {
         for (let dy = 0; dy <= 1; dy++) {
           for (let dz = 0; dz <= 1; dz++) {
             const x = x0 + dx, y = y0 + dy, z = z0 + dz;
-            if (x < 0 || x >= N || y < 0 || y >= N || z < 0 || z >= N) continue;
+            if (x < 0 || x >= Nx || y < 0 || y >= Ny || z < 0 || z >= Nz) continue;
             const w = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz);
-            const idx = (x * N + y) * N + z;
+            const idx = (x * Ny + y) * Nz + z;
             out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + r * w);
             out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + g * w);
             out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + b * w);

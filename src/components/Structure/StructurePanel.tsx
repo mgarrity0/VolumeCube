@@ -1,11 +1,18 @@
 import { useAppStore } from '../../state/store';
-import { ledCount } from '../../core/cubeGeometry';
+import { edges, ledCount } from '../../core/cubeGeometry';
 import type { LayerOrder, LayerStart, RowDirection } from '../../core/wiring';
 
-// StructurePanel covers both the physical dimensions (N, edge length)
+// StructurePanel covers both the physical dimensions (Nx/Ny/Nz, pitch)
 // and the wiring order the LED data stream follows through the cube.
 // Wiring settings feed the address map used by the transports and the
-// wiring-path overlay (Phase 5).
+// wiring-path overlay.
+
+const MIN_N = 1;
+const MAX_N = 64;
+
+function clampN(v: number): number {
+  return Math.max(MIN_N, Math.min(MAX_N, Math.round(Number.isFinite(v) ? v : MIN_N)));
+}
 
 export function StructurePanel() {
   const cube = useAppStore((s) => s.cube);
@@ -15,47 +22,60 @@ export function StructurePanel() {
   const showWiringPath = useAppStore((s) => s.showWiringPath);
   const setShowWiringPath = useAppStore((s) => s.setShowWiringPath);
 
-  const N = cube.N;
-  const edge = cube.edgeMeters;
+  const e = edges(cube);
 
   return (
     <section className="panel-section">
       <h2>Structure</h2>
       <div className="field">
-        <span>Cube size N</span>
+        <span>X (width)</span>
         <input
           type="number"
-          min={2}
-          max={32}
+          min={MIN_N}
+          max={MAX_N}
           step={1}
-          value={N}
-          onChange={(e) => {
-            const v = Math.max(2, Math.min(32, Number(e.target.value) || 2));
-            patch({ N: v });
-          }}
+          value={cube.Nx}
+          onChange={(e) => patch({ Nx: clampN(Number(e.target.value)) })}
         />
       </div>
       <div className="field">
-        <span>Edge length (m)</span>
+        <span>Y (height)</span>
         <input
           type="number"
-          min={0.1}
-          max={10}
-          step={0.01}
-          value={edge}
-          onChange={(e) => {
-            const v = Math.max(0.1, Math.min(10, Number(e.target.value) || 0.1));
-            patch({ edgeMeters: v });
-          }}
+          min={MIN_N}
+          max={MAX_N}
+          step={1}
+          value={cube.Ny}
+          onChange={(e) => patch({ Ny: clampN(Number(e.target.value)) })}
         />
       </div>
       <div className="field">
-        <span>Layers</span>
-        <input type="number" value={N} readOnly />
+        <span>Z (depth / panels)</span>
+        <input
+          type="number"
+          min={MIN_N}
+          max={MAX_N}
+          step={1}
+          value={cube.Nz}
+          onChange={(e) => patch({ Nz: clampN(Number(e.target.value)) })}
+        />
       </div>
       <div className="field">
-        <span>LEDs per row</span>
-        <input type="number" value={N} readOnly />
+        <span>LED pitch (m)</span>
+        <input
+          type="number"
+          min={0.005}
+          max={1}
+          step={0.001}
+          value={cube.pitchMeters}
+          onChange={(ev) => {
+            const v = Math.max(0.005, Math.min(1, Number(ev.target.value) || 0.005));
+            patch({ pitchMeters: v });
+          }}
+        />
+      </div>
+      <div className="stat-line">
+        Edge: <strong>{e.x.toFixed(2)} × {e.y.toFixed(2)} × {e.z.toFixed(2)} m</strong>
       </div>
       <div className="stat-line">
         Total LEDs: <strong>{ledCount(cube).toLocaleString()}</strong>
@@ -79,9 +99,9 @@ export function StructurePanel() {
           onChange={(e) => patchWiring({ layerStart: e.target.value as LayerStart })}
         >
           <option value="corner-00">Corner (0, 0)</option>
-          <option value="corner-N0">Corner (N-1, 0)</option>
-          <option value="corner-0N">Corner (0, N-1)</option>
-          <option value="corner-NN">Corner (N-1, N-1)</option>
+          <option value="corner-N0">Corner (Nx-1, 0)</option>
+          <option value="corner-0N">Corner (0, Nz-1)</option>
+          <option value="corner-NN">Corner (Nx-1, Nz-1)</option>
         </select>
       </div>
       <div className="field">

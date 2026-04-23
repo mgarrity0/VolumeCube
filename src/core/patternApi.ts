@@ -59,14 +59,17 @@ export type RenderContext = {
   t: number;          // seconds since pattern start
   dt: number;         // seconds since last frame
   frame: number;      // frames since start (0 on activation)
-  N: number;          // cube edge
+  Nx: number;         // grid dims — may differ per axis
+  Ny: number;
+  Nz: number;
+  N: number;          // max(Nx, Ny, Nz) — convenience for cube-shaped patterns
   params: Record<string, any>;
   audio: AudioState;
   power: PowerState;
   utils: PatternUtils;
 };
 
-export type SetupContext = Pick<RenderContext, 'N' | 'params'>;
+export type SetupContext = Pick<RenderContext, 'Nx' | 'Ny' | 'Nz' | 'N' | 'params'>;
 
 export type VoxelCoord = {
   x: number; y: number; z: number;

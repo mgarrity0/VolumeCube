@@ -259,7 +259,7 @@ export function OutputPanel() {
           <div className="stat-line">
             Est. size:{' '}
             <strong>
-              {(estimateExportSize(cube.N, output.exportSeconds, output.exportFps) / 1024).toFixed(0)} KB
+              {(estimateExportSize(cube, output.exportSeconds, output.exportFps) / 1024).toFixed(0)} KB
             </strong>
           </div>
           <button

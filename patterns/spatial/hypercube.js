@@ -46,16 +46,16 @@ const EDGES = (() => {
   return e;
 })();
 
-function splat(out, N, x, y, z, r, g, b) {
+function splat(out, Nx, Ny, Nz, x, y, z, r, g, b) {
   const x0 = Math.floor(x), y0 = Math.floor(y), z0 = Math.floor(z);
   const fx = x - x0, fy = y - y0, fz = z - z0;
   for (let dx = 0; dx <= 1; dx++) {
     for (let dy = 0; dy <= 1; dy++) {
       for (let dz = 0; dz <= 1; dz++) {
         const xx = x0 + dx, yy = y0 + dy, zz = z0 + dz;
-        if (xx < 0 || xx >= N || yy < 0 || yy >= N || zz < 0 || zz >= N) continue;
+        if (xx < 0 || xx >= Nx || yy < 0 || yy >= Ny || zz < 0 || zz >= Nz) continue;
         const w = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz);
-        const idx = (xx * N + yy) * N + zz;
+        const idx = (xx * Ny + yy) * Nz + zz;
         out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + r * w);
         out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + g * w);
         out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + b * w);
@@ -67,23 +67,25 @@ function splat(out, N, x, y, z, r, g, b) {
 export default class Hypercube {
   static name = 'Hypercube';
 
-  setup(ctx) {
-    this.N = ctx.N;
+  setup() {
     this.angleXW = 0;
     this.angleZW = 0;
     this.angleXY = 0;
   }
 
   render(ctx, out) {
-    const { N, dt, params, utils } = ctx;
+    const { Nx, Ny, Nz, dt, params, utils } = ctx;
     out.fill(0);
 
     this.angleXW += params.speed * dt;
     this.angleZW += params.speed * 0.6 * dt;
     this.angleXY += params.speed * 0.3 * dt;
 
-    const half = (N - 1) / 2;
-    const scale = (N - 1) * 0.28; // projected-unit → voxel extent
+    const halfX = (Nx - 1) / 2;
+    const halfY = (Ny - 1) / 2;
+    const halfZ = (Nz - 1) / 2;
+    // Fit the projected tesseract inside the shortest axis so nothing clips.
+    const scale = Math.min(Nx, Ny, Nz) * 0.28;
     const persp = params.perspective;
 
     // Project all 16 vertices once so edges can look up endpoints.
@@ -124,14 +126,14 @@ export default class Hypercube {
       const steps = Math.max(2, Math.ceil(len3 * 2));
       for (let s = 0; s <= steps; s++) {
         const t = s / steps;
-        const x = half + (va.x + dx * t) * scale;
-        const y = half + (va.y + dy * t) * scale;
-        const z = half + (va.z + dz * t) * scale;
+        const x = halfX + (va.x + dx * t) * scale;
+        const y = halfY + (va.y + dy * t) * scale;
+        const z = halfZ + (va.z + dz * t) * scale;
         const wBlend = ((va.w + (vb.w - va.w) * t) + 1) * 0.5;
         const r = (nr + (fr - nr) * wBlend) * bright;
         const g = (ng + (fg - ng) * wBlend) * bright;
         const bc = (nb + (fb - nb) * wBlend) * bright;
-        splat(out, N, x, y, z, r, g, bc);
+        splat(out, Nx, Ny, Nz, x, y, z, r, g, bc);
       }
     }
 
@@ -143,8 +145,8 @@ export default class Hypercube {
         const g = ng + (fg - ng) * wBlend;
         const bc = nb + (fb - nb) * wBlend;
         // Double-splat to brighten vertex points above the line weight.
-        splat(out, N, half + v.x * scale, half + v.y * scale, half + v.z * scale, r, g, bc);
-        splat(out, N, half + v.x * scale, half + v.y * scale, half + v.z * scale, r, g, bc);
+        splat(out, Nx, Ny, Nz, halfX + v.x * scale, halfY + v.y * scale, halfZ + v.z * scale, r, g, bc);
+        splat(out, Nx, Ny, Nz, halfX + v.x * scale, halfY + v.y * scale, halfZ + v.z * scale, r, g, bc);
       }
     }
   }

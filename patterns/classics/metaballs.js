@@ -24,8 +24,7 @@ export const params = {
 export default class Metaballs {
   static name = 'Metaballs';
 
-  setup(ctx) {
-    this.N = ctx.N;
+  setup() {
     // Pre-seed 12 blob "personalities" — we sample as many as `count`
     // each frame so changing the slider keeps the existing blobs stable.
     this.seed = [];
@@ -43,10 +42,14 @@ export default class Metaballs {
   }
 
   render(ctx, out) {
-    const { t, N, params, utils } = ctx;
+    const { t, Nx, Ny, Nz, params, utils } = ctx;
     const count = Math.min(params.count, this.seed.length);
-    const half = (N - 1) / 2;
-    const radius = params.size * half * 0.55;
+    const halfX = (Nx - 1) / 2;
+    const halfY = (Ny - 1) / 2;
+    const halfZ = (Nz - 1) / 2;
+    // Radius keyed to the smallest axis so blobs stay inside the volume.
+    const halfMin = Math.min(halfX, halfY, halfZ);
+    const radius = params.size * halfMin * 0.55;
     const r2 = radius * radius;
     const thresh = params.threshold;
     const soft = Math.max(0.01, params.softness);
@@ -60,15 +63,15 @@ export default class Metaballs {
     const bh = new Float32Array(count);
     for (let i = 0; i < count; i++) {
       const s = this.seed[i];
-      bx[i] = half + Math.sin(t * params.speed * s.freqX + s.phaseX) * half * 0.7;
-      by[i] = half + Math.sin(t * params.speed * s.freqY + s.phaseY) * half * 0.7;
-      bz[i] = half + Math.sin(t * params.speed * s.freqZ + s.phaseZ) * half * 0.7;
+      bx[i] = halfX + Math.sin(t * params.speed * s.freqX + s.phaseX) * halfX * 0.7;
+      by[i] = halfY + Math.sin(t * params.speed * s.freqY + s.phaseY) * halfY * 0.7;
+      bz[i] = halfZ + Math.sin(t * params.speed * s.freqZ + s.phaseZ) * halfZ * 0.7;
       bh[i] = s.hue;
     }
 
-    for (let x = 0; x < N; x++) {
-      for (let y = 0; y < N; y++) {
-        for (let z = 0; z < N; z++) {
+    for (let x = 0; x < Nx; x++) {
+      for (let y = 0; y < Ny; y++) {
+        for (let z = 0; z < Nz; z++) {
           let field = 0;
           let hueAcc = 0, weightAcc = 0;
           for (let i = 0; i < count; i++) {
@@ -82,7 +85,7 @@ export default class Metaballs {
             weightAcc += c;
           }
           const alpha = utils.smoothstep(thresh - soft, thresh + soft, field);
-          const idx = (x * N + y) * N + z;
+          const idx = (x * Ny + y) * Nz + z;
           if (alpha < 0.01) {
             out[idx * 3 + 0] = 0;
             out[idx * 3 + 1] = 0;

@@ -49,7 +49,10 @@ export function Cube() {
   const patternBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const dutyBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const streamBuf = useMemo(() => new Uint8Array(count * 3), [count]);
-  const addressMap = useMemo(() => buildAddressMap(wiring, cube.N), [wiring, cube.N]);
+  const addressMap = useMemo(
+    () => buildAddressMap(wiring, cube.Nx, cube.Ny, cube.Nz),
+    [wiring, cube.Nx, cube.Ny, cube.Nz],
+  );
 
   // Shader material + its uniforms live outside React so the per-frame
   // loop can touch them without causing re-renders. Rebuilt only on cube
@@ -136,6 +139,8 @@ export function Cube() {
       gammaLutRef.current.lut = buildGammaLut(colorCfg.gamma);
     }
 
+    const Nmax = Math.max(spec.Nx, spec.Ny, spec.Nz);
+
     // Reset time base + run setup when a new pattern was activated.
     if (clock.current.setupCookie !== loadToken) {
       clock.current.setupCookie = loadToken;
@@ -143,7 +148,10 @@ export function Cube() {
       clock.current.frame = 0;
       if (activePattern.setup) {
         try {
-          activePattern.setup({ N: spec.N, params: paramValues });
+          activePattern.setup({
+            Nx: spec.Nx, Ny: spec.Ny, Nz: spec.Nz, N: Nmax,
+            params: paramValues,
+          });
         } catch (e) {
           store.setPatternError(String(e));
           store.setActivePattern(null);
@@ -156,7 +164,10 @@ export function Cube() {
       t: now - clock.current.patternStart,
       dt: delta,
       frame: clock.current.frame++,
-      N: spec.N,
+      Nx: spec.Nx,
+      Ny: spec.Ny,
+      Nz: spec.Nz,
+      N: Nmax,
       params: paramValues,
       audio: {
         energy: audioEngine.energy,

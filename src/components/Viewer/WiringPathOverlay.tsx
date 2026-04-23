@@ -21,7 +21,7 @@ export function WiringPathOverlay() {
 
   const { positions, colors } = useMemo(() => {
     const logical = buildCoords(cube).positions;
-    const map = buildAddressMap(wiring, cube.N);
+    const map = buildAddressMap(wiring, cube.Nx, cube.Ny, cube.Nz);
     const streamPositions = buildStreamPath(map, logical);
     const count = streamPositions.length / 3;
     const c = new Float32Array(count * 3);

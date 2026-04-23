@@ -32,8 +32,8 @@ export const params = {
   oldColor:    { type: 'color', default: '#ff60a0' },
 };
 
-function seedBuf(N, density) {
-  const buf = new Uint8Array(N * N * N);
+function seedBuf(count, density) {
+  const buf = new Uint8Array(count);
   for (let i = 0; i < buf.length; i++) buf[i] = Math.random() < density ? 1 : 0;
   return buf;
 }
@@ -42,8 +42,9 @@ export default class Life3D {
   static name = 'Life 3D';
 
   setup(ctx) {
-    this.N = ctx.N;
-    this.state = seedBuf(ctx.N, ctx.params.seedDensity);
+    this.Nx = ctx.Nx; this.Ny = ctx.Ny; this.Nz = ctx.Nz;
+    const total = this.Nx * this.Ny * this.Nz;
+    this.state = seedBuf(total, ctx.params.seedDensity);
     this.age = new Uint8Array(this.state.length);
     for (let i = 0; i < this.state.length; i++) this.age[i] = this.state[i];
     this.stepAcc = 0;
@@ -52,7 +53,8 @@ export default class Life3D {
   }
 
   reseed(density) {
-    this.state = seedBuf(this.N, density);
+    const total = this.Nx * this.Ny * this.Nz;
+    this.state = seedBuf(total, density);
     this.age = new Uint8Array(this.state.length);
     for (let i = 0; i < this.state.length; i++) this.age[i] = this.state[i];
     this.stableFor = 0;
@@ -60,7 +62,7 @@ export default class Life3D {
   }
 
   step(rule) {
-    const N = this.N;
+    const { Nx, Ny, Nz } = this;
     const cur = this.state;
     const curAge = this.age;
     const next = new Uint8Array(cur.length);
@@ -68,13 +70,13 @@ export default class Life3D {
     let pop = 0;
     // Pre-built neighbor tables so the per-voxel count stays allocation-free.
     const xn = new Int32Array(3), yn = new Int32Array(3), zn = new Int32Array(3);
-    for (let x = 0; x < N; x++) {
-      xn[0] = (x - 1 + N) % N; xn[1] = x; xn[2] = (x + 1) % N;
-      for (let y = 0; y < N; y++) {
-        yn[0] = (y - 1 + N) % N; yn[1] = y; yn[2] = (y + 1) % N;
-        for (let z = 0; z < N; z++) {
-          zn[0] = (z - 1 + N) % N; zn[1] = z; zn[2] = (z + 1) % N;
-          // 26-neighbor count — the inner loop dominates step() cost at N=10+.
+    for (let x = 0; x < Nx; x++) {
+      xn[0] = (x - 1 + Nx) % Nx; xn[1] = x; xn[2] = (x + 1) % Nx;
+      for (let y = 0; y < Ny; y++) {
+        yn[0] = (y - 1 + Ny) % Ny; yn[1] = y; yn[2] = (y + 1) % Ny;
+        for (let z = 0; z < Nz; z++) {
+          zn[0] = (z - 1 + Nz) % Nz; zn[1] = z; zn[2] = (z + 1) % Nz;
+          // 26-neighbor count — the inner loop dominates step() cost.
           let n = 0;
           for (let a = 0; a < 3; a++) {
             const xi = xn[a];
@@ -82,11 +84,11 @@ export default class Life3D {
               const yi = yn[b];
               for (let c = 0; c < 3; c++) {
                 if (a === 1 && b === 1 && c === 1) continue;
-                if (cur[(xi * N + yi) * N + zn[c]]) n++;
+                if (cur[(xi * Ny + yi) * Nz + zn[c]]) n++;
               }
             }
           }
-          const idx = (x * N + y) * N + z;
+          const idx = (x * Ny + y) * Nz + z;
           const alive = cur[idx] === 1;
           const willLive = alive ? rule.survive.has(n) : rule.birth.has(n);
           if (willLive) {
@@ -109,8 +111,8 @@ export default class Life3D {
   }
 
   update(ctx) {
-    const { dt, N, params } = ctx;
-    if (this.N !== N) this.setup(ctx);
+    const { dt, Nx, Ny, Nz, params } = ctx;
+    if (this.Nx !== Nx || this.Ny !== Ny || this.Nz !== Nz) this.setup(ctx);
     const rule = RULES[params.rule] ?? RULES['B5678/S45678 (Bays)'];
     this.stepAcc += params.stepRate * dt;
     // Cap iterations per frame so a big cube + high stepRate can't stall the

@@ -2,22 +2,22 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import { useAppStore } from '../../state/store';
+import { edges } from '../../core/cubeGeometry';
 
 // Ghost mode: thin wireframe bounding box.
-// Full mode: bounding box + N translucent XZ planes (one per mesh layer) +
-//            a vertical wire connecting the corners of each layer, meant
+// Full mode: bounding box + Ny translucent XZ planes (one per mesh layer)
+//            + vertical wires connecting the corners of each layer, meant
 //            to suggest the data/power path running between layers.
 
 const GHOST_COLOR = '#2a3a70';
 const FULL_COLOR = '#3a4a88';
 
-function boxEdges(edge: number): [number, number, number][][] {
-  const h = edge / 2;
+function boxEdges(ex: number, ey: number, ez: number): [number, number, number][][] {
+  const hx = ex / 2, hy = ey / 2, hz = ez / 2;
   const c = [
-    [-h, -h, -h], [ h, -h, -h], [ h,  h, -h], [-h,  h, -h],
-    [-h, -h,  h], [ h, -h,  h], [ h,  h,  h], [-h,  h,  h],
+    [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [-hx,  hy, -hz],
+    [-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [-hx,  hy,  hz],
   ] as [number, number, number][];
-  // 12 edges of a cube as pairs of corner indices.
   const pairs: [number, number][] = [
     [0, 1], [1, 2], [2, 3], [3, 0],
     [4, 5], [5, 6], [6, 7], [7, 4],
@@ -26,8 +26,10 @@ function boxEdges(edge: number): [number, number, number][][] {
   return pairs.map(([a, b]) => [c[a], c[b]]);
 }
 
-function BoundingBox({ edge, color, opacity = 1 }: { edge: number; color: string; opacity?: number }) {
-  const edges = useMemo(() => boxEdges(edge), [edge]);
+function BoundingBox({
+  ex, ey, ez, color, opacity = 1,
+}: { ex: number; ey: number; ez: number; color: string; opacity?: number }) {
+  const edges = useMemo(() => boxEdges(ex, ey, ez), [ex, ey, ez]);
   return (
     <>
       {edges.map((pts, i) => (
@@ -44,10 +46,10 @@ function BoundingBox({ edge, color, opacity = 1 }: { edge: number; color: string
   );
 }
 
-function LayerPlanes({ N, edge }: { N: number; edge: number }) {
-  const spacing = N > 1 ? edge / (N - 1) : 0;
-  const half = edge / 2;
-  const geom = useMemo(() => new THREE.PlaneGeometry(edge, edge), [edge]);
+function LayerPlanes({ Ny, ex, ey, ez }: { Ny: number; ex: number; ey: number; ez: number }) {
+  const spacing = Ny > 1 ? ey / (Ny - 1) : 0;
+  const halfY = ey / 2;
+  const geom = useMemo(() => new THREE.PlaneGeometry(ex, ez), [ex, ez]);
   const mat = useMemo(
     () =>
       new THREE.MeshBasicMaterial({
@@ -61,12 +63,12 @@ function LayerPlanes({ N, edge }: { N: number; edge: number }) {
   );
   return (
     <>
-      {Array.from({ length: N }, (_, y) => (
+      {Array.from({ length: Ny }, (_, y) => (
         <mesh
           key={y}
           geometry={geom}
           material={mat}
-          position={[0, y * spacing - half, 0]}
+          position={[0, y * spacing - halfY, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
         />
       ))}
@@ -74,11 +76,11 @@ function LayerPlanes({ N, edge }: { N: number; edge: number }) {
   );
 }
 
-function LayerColumns({ edge }: { edge: number }) {
-  // Four thin vertical wires at the cube corners connecting all N layers.
-  const h = edge / 2;
+function LayerColumns({ ex, ey, ez }: { ex: number; ey: number; ez: number }) {
+  // Four thin vertical wires at the cube corners connecting all layers.
+  const hx = ex / 2, hy = ey / 2, hz = ez / 2;
   const corners: [number, number][] = [
-    [-h, -h], [ h, -h], [ h,  h], [-h,  h],
+    [-hx, -hz], [ hx, -hz], [ hx,  hz], [-hx,  hz],
   ];
   return (
     <>
@@ -86,8 +88,8 @@ function LayerColumns({ edge }: { edge: number }) {
         <Line
           key={i}
           points={[
-            [x, -h, z],
-            [x,  h, z],
+            [x, -hy, z],
+            [x,  hy, z],
           ]}
           color={FULL_COLOR}
           lineWidth={1}
@@ -105,13 +107,15 @@ export function StructureOverlay() {
 
   if (mode === 'clean') return null;
 
+  const e = edges(cube);
+
   return (
     <>
-      <BoundingBox edge={cube.edgeMeters} color={GHOST_COLOR} opacity={mode === 'ghost' ? 0.6 : 0.9} />
+      <BoundingBox ex={e.x} ey={e.y} ez={e.z} color={GHOST_COLOR} opacity={mode === 'ghost' ? 0.6 : 0.9} />
       {mode === 'full' && (
         <>
-          <LayerPlanes N={cube.N} edge={cube.edgeMeters} />
-          <LayerColumns edge={cube.edgeMeters} />
+          <LayerPlanes Ny={cube.Ny} ex={e.x} ey={e.y} ez={e.z} />
+          <LayerColumns ex={e.x} ey={e.y} ez={e.z} />
         </>
       )}
     </>

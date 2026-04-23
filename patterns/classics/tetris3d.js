@@ -1,6 +1,6 @@
 // Tetris 3D — auto-playing volumetric Tetris simulator.
 //
-// Pieces (tetracubes — four connected unit cubes) fall from Y=N-1 toward
+// Pieces (tetracubes — four connected unit cubes) fall from Y=Ny-1 toward
 // Y=0 in discrete steps. When a piece can't fall further, it locks into
 // the stack. Any fully-filled XZ slice is flashed white for a beat then
 // collapsed, with the layers above dropping down by one — the 3D
@@ -73,13 +73,31 @@ export const params = {
   stackBright: { type: 'range', min: 0.3, max: 1,   step: 0.05, default: 0.75, label: 'Stack brightness' },
 };
 
+// Pick a rotation that fits within the (Nx, Ny, Nz) grid — filters out
+// rotations whose footprint exceeds any axis. Falls back to the first
+// rotation if none fit (tiny grids will clip visually, which is fine).
+function fittingRots(piece, Nx, Ny, Nz) {
+  const fits = [];
+  for (const rot of piece.rots) {
+    let maxX = 0, maxY = 0, maxZ = 0;
+    for (const [dx, dy, dz] of rot) {
+      if (dx > maxX) maxX = dx;
+      if (dy > maxY) maxY = dy;
+      if (dz > maxZ) maxZ = dz;
+    }
+    if (maxX < Nx && maxY < Ny && maxZ < Nz) fits.push(rot);
+  }
+  return fits.length > 0 ? fits : [piece.rots[0]];
+}
+
 export default class Tetris3D {
   static name = 'Tetris 3D (Auto-play)';
 
   setup(ctx) {
-    this.N = ctx.N;
-    this.stack = new Uint8Array(ctx.N ** 3);
-    this.color = new Uint8Array(ctx.N ** 3 * 3);
+    this.Nx = ctx.Nx; this.Ny = ctx.Ny; this.Nz = ctx.Nz;
+    const total = this.Nx * this.Ny * this.Nz;
+    this.stack = new Uint8Array(total);
+    this.color = new Uint8Array(total * 3);
     this.flashLayers = [];
     this.dropAcc = 0;
     this.pauseT = 0;
@@ -87,38 +105,41 @@ export default class Tetris3D {
   }
 
   spawnPiece() {
-    const N = this.N;
+    const { Nx, Ny, Nz } = this;
     const piece = PIECES[(Math.random() * PIECES.length) | 0];
-    const rot = piece.rots[(Math.random() * piece.rots.length) | 0];
-    // Shift origin so the piece fits inside the X/Z bounds at any random (x, z).
+    const rots = fittingRots(piece, Nx, Ny, Nz);
+    const rot = rots[(Math.random() * rots.length) | 0];
     let maxX = 0, maxZ = 0;
     for (const [dx, , dz] of rot) { if (dx > maxX) maxX = dx; if (dz > maxZ) maxZ = dz; }
     this.piece = {
       blocks: rot,
       color: piece.color,
-      x: Math.floor(Math.random() * (N - maxX)),
-      y: N - 1,
-      z: Math.floor(Math.random() * (N - maxZ)),
+      x: Math.floor(Math.random() * Math.max(1, Nx - maxX)),
+      y: Ny - 1,
+      z: Math.floor(Math.random() * Math.max(1, Nz - maxZ)),
     };
   }
 
+  idx(x, y, z) {
+    return (x * this.Ny + y) * this.Nz + z;
+  }
+
   collides(px, py, pz) {
-    const N = this.N;
+    const { Nx, Nz } = this;
     for (const [dx, dy, dz] of this.piece.blocks) {
       const x = px + dx, y = py + dy, z = pz + dz;
-      if (x < 0 || x >= N || z < 0 || z >= N) return true;
+      if (x < 0 || x >= Nx || z < 0 || z >= Nz) return true;
       if (y < 0) return true;
-      if (this.stack[(x * N + y) * N + z]) return true;
+      if (this.stack[this.idx(x, y, z)]) return true;
     }
     return false;
   }
 
   lock() {
-    const N = this.N;
     const [cr, cg, cb] = this.piece.color;
     for (const [dx, dy, dz] of this.piece.blocks) {
       const x = this.piece.x + dx, y = this.piece.y + dy, z = this.piece.z + dz;
-      const idx = (x * N + y) * N + z;
+      const idx = this.idx(x, y, z);
       this.stack[idx] = 1;
       this.color[idx * 3 + 0] = cr;
       this.color[idx * 3 + 1] = cg;
@@ -128,12 +149,12 @@ export default class Tetris3D {
   }
 
   queueLayerClears() {
-    const N = this.N;
-    for (let y = 0; y < N; y++) {
+    const { Nx, Ny, Nz } = this;
+    for (let y = 0; y < Ny; y++) {
       let full = true;
-      for (let x = 0; x < N && full; x++) {
-        for (let z = 0; z < N && full; z++) {
-          if (!this.stack[(x * N + y) * N + z]) full = false;
+      for (let x = 0; x < Nx && full; x++) {
+        for (let z = 0; z < Nz && full; z++) {
+          if (!this.stack[this.idx(x, y, z)]) full = false;
         }
       }
       if (full) this.flashLayers.push({ y, remaining: 1 });
@@ -141,13 +162,13 @@ export default class Tetris3D {
   }
 
   collapseLayer(y) {
-    const N = this.N;
+    const { Nx, Ny, Nz } = this;
     // Shift every cell above y down by one, then zero the top layer.
-    for (let yy = y; yy < N - 1; yy++) {
-      for (let x = 0; x < N; x++) {
-        for (let z = 0; z < N; z++) {
-          const src = (x * N + (yy + 1)) * N + z;
-          const dst = (x * N + yy) * N + z;
+    for (let yy = y; yy < Ny - 1; yy++) {
+      for (let x = 0; x < Nx; x++) {
+        for (let z = 0; z < Nz; z++) {
+          const src = this.idx(x, yy + 1, z);
+          const dst = this.idx(x, yy, z);
           this.stack[dst] = this.stack[src];
           this.color[dst * 3 + 0] = this.color[src * 3 + 0];
           this.color[dst * 3 + 1] = this.color[src * 3 + 1];
@@ -155,9 +176,9 @@ export default class Tetris3D {
         }
       }
     }
-    for (let x = 0; x < N; x++) {
-      for (let z = 0; z < N; z++) {
-        const idx = (x * N + (N - 1)) * N + z;
+    for (let x = 0; x < Nx; x++) {
+      for (let z = 0; z < Nz; z++) {
+        const idx = this.idx(x, Ny - 1, z);
         this.stack[idx] = 0;
         this.color[idx * 3 + 0] = 0;
         this.color[idx * 3 + 1] = 0;
@@ -175,8 +196,8 @@ export default class Tetris3D {
   }
 
   update(ctx) {
-    const { dt, N, params } = ctx;
-    if (this.N !== N) this.setup(ctx);
+    const { dt, Nx, Ny, Nz, params } = ctx;
+    if (this.Nx !== Nx || this.Ny !== Ny || this.Nz !== Nz) this.setup(ctx);
 
     // Resolve layer-clear flashes: each flash ticks down in normalized time
     // (1.0 → 0.0 over clearFlash seconds), then the layer collapses and any
@@ -215,9 +236,9 @@ export default class Tetris3D {
   }
 
   render(ctx, out) {
-    const { N, params } = ctx;
+    const { Nx, Ny, Nz, params } = ctx;
     out.fill(0);
-    const total = N * N * N;
+    const total = Nx * Ny * Nz;
 
     const sb = params.stackBright;
     for (let i = 0; i < total; i++) {
@@ -232,9 +253,9 @@ export default class Tetris3D {
     for (const f of this.flashLayers) {
       const k = Math.max(0, f.remaining);
       const v = 200 + 55 * k;
-      for (let x = 0; x < N; x++) {
-        for (let z = 0; z < N; z++) {
-          const idx = (x * N + f.y) * N + z;
+      for (let x = 0; x < Nx; x++) {
+        for (let z = 0; z < Nz; z++) {
+          const idx = this.idx(x, f.y, z);
           out[idx * 3 + 0] = v;
           out[idx * 3 + 1] = v;
           out[idx * 3 + 2] = v;
@@ -247,8 +268,8 @@ export default class Tetris3D {
       const pb = params.pieceBright;
       for (const [dx, dy, dz] of this.piece.blocks) {
         const x = this.piece.x + dx, y = this.piece.y + dy, z = this.piece.z + dz;
-        if (x < 0 || x >= N || y < 0 || y >= N || z < 0 || z >= N) continue;
-        const idx = (x * N + y) * N + z;
+        if (x < 0 || x >= Nx || y < 0 || y >= Ny || z < 0 || z >= Nz) continue;
+        const idx = this.idx(x, y, z);
         out[idx * 3 + 0] = Math.min(255, cr * pb);
         out[idx * 3 + 1] = Math.min(255, cg * pb);
         out[idx * 3 + 2] = Math.min(255, cb * pb);

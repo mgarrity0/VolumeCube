@@ -1,10 +1,11 @@
 // Wiring and address map.
 //
 // The LED data stream hits the physical strip in whatever order the
-// user wired their ten 10×10 mesh layers. Logical index (x*N² + y*N + z)
-// is the coordinate system patterns use; stream index is "the nth RGB
-// triple in the UART/UDP payload". This file builds a lookup table
-// between the two so the transport layer can re-order frames.
+// user wired their Ny stacked panels (each panel is an Nx × Nz grid).
+// Logical index (x*Ny*Nz + y*Nz + z) is the coordinate system patterns
+// use; stream index is "the nth RGB triple in the UART/UDP payload".
+// This file builds a lookup table between the two so the transport
+// layer can re-order frames.
 //
 // Config covers all the common mesh-wiring permutations:
 //   layerOrder      — bottom-up vs top-down (which Y comes first)
@@ -38,12 +39,12 @@ export const defaultWiringConfig: WiringConfig = {
 
 type CornerStart = { startX: number; startZ: number; stepX: 1 | -1; stepZ: 1 | -1 };
 
-function cornerToStart(corner: LayerStart, N: number): CornerStart {
+function cornerToStart(corner: LayerStart, Nx: number, Nz: number): CornerStart {
   switch (corner) {
-    case 'corner-00': return { startX: 0,     startZ: 0,     stepX: 1,  stepZ: 1  };
-    case 'corner-N0': return { startX: N - 1, startZ: 0,     stepX: -1, stepZ: 1  };
-    case 'corner-0N': return { startX: 0,     startZ: N - 1, stepX: 1,  stepZ: -1 };
-    case 'corner-NN': return { startX: N - 1, startZ: N - 1, stepX: -1, stepZ: -1 };
+    case 'corner-00': return { startX: 0,      startZ: 0,      stepX: 1,  stepZ: 1  };
+    case 'corner-N0': return { startX: Nx - 1, startZ: 0,      stepX: -1, stepZ: 1  };
+    case 'corner-0N': return { startX: 0,      startZ: Nz - 1, stepX: 1,  stepZ: -1 };
+    case 'corner-NN': return { startX: Nx - 1, startZ: Nz - 1, stepX: -1, stepZ: -1 };
   }
 }
 
@@ -58,37 +59,42 @@ function flipLayerStart(c: LayerStart): LayerStart {
 
 /**
  * Map logical voxel index → stream index.
- * Guaranteed to be a bijection over [0, N³) when the config is valid.
+ * Guaranteed to be a bijection over [0, Nx*Ny*Nz) when the config is valid.
  */
-export function buildAddressMap(cfg: WiringConfig, N: number): Uint32Array {
-  const map = new Uint32Array(N * N * N);
+export function buildAddressMap(cfg: WiringConfig, Nx: number, Ny: number, Nz: number): Uint32Array {
+  const total = Nx * Ny * Nz;
+  const map = new Uint32Array(total);
   let streamIdx = 0;
 
-  for (let ly = 0; ly < N; ly++) {
-    const y = cfg.layerOrder === 'bottom-up' ? ly : N - 1 - ly;
+  // rowDirection picks which axis is the inner (row-traversal) counter:
+  //   x-major  → inner = X (length Nx), outer = Z (length Nz)
+  //   z-major  → inner = Z (length Nz), outer = X (length Nx)
+  const innerLen = cfg.rowDirection === 'x-major' ? Nx : Nz;
+  const outerLen = cfg.rowDirection === 'x-major' ? Nz : Nx;
+
+  for (let ly = 0; ly < Ny; ly++) {
+    const y = cfg.layerOrder === 'bottom-up' ? ly : Ny - 1 - ly;
 
     let layerStart = cfg.layerStart;
     if (cfg.layerSerpentine && (ly & 1)) layerStart = flipLayerStart(layerStart);
 
-    const { startX, startZ, stepX, stepZ } = cornerToStart(layerStart, N);
+    const { startX, startZ, stepX, stepZ } = cornerToStart(layerStart, Nx, Nz);
 
-    for (let r = 0; r < N; r++) {
-      for (let c = 0; c < N; c++) {
+    for (let r = 0; r < outerLen; r++) {
+      for (let c = 0; c < innerLen; c++) {
         // Serpentine reverses the inner counter on odd rows.
-        const inner = (cfg.serpentine && (r & 1)) ? (N - 1 - c) : c;
+        const inner = (cfg.serpentine && (r & 1)) ? (innerLen - 1 - c) : c;
 
         let x: number, z: number;
         if (cfg.rowDirection === 'x-major') {
-          // Inner counter runs along X, outer along Z.
           x = startX + stepX * inner;
           z = startZ + stepZ * r;
         } else {
-          // Inner counter runs along Z, outer along X.
           x = startX + stepX * r;
           z = startZ + stepZ * inner;
         }
 
-        const logical = x * N * N + y * N + z;
+        const logical = x * Ny * Nz + y * Nz + z;
         map[logical] = streamIdx;
         streamIdx++;
       }

@@ -1,6 +1,6 @@
 # VolumeCube
 
-**A volumetric LED-cube simulator and pattern-authoring tool.** Designed around a 10×10×10 WS2815 cube driven by an ESP32, but parameterised over `N` — the same stack works for any N×N×N build from 4³ up.
+**A volumetric LED-cube simulator and pattern-authoring tool.** Designed around a 10×10×10 WS2815 cube driven by an ESP32, and parameterised over independent `Nx × Ny × Nz` + physical pitch — the same stack works for non-cubic builds (e.g. a 10×10×3 stack of panels) and scales up as you add more hardware.
 
 Write a pattern in plain JavaScript. Drop it into `patterns/`. It hot-reloads and starts rendering in a React-Three-Fiber viewport with bloom glow and billboarded-shader LEDs. Tune color, power, wiring, and audio-reactivity from side panels. Stream frames to real hardware over WLED UDP (DDP) or USB serial, or bake them into a standalone FastLED `.ino` that runs without a host.
 
@@ -164,7 +164,7 @@ Twenty-two built-in patterns organised by category. All are plain `.js` files un
 - **sweeping-plane** — Bright plane that sweeps along a chosen axis.
 - **rotating-cube** — Wireframe cube rotating around all three axes.
 - **expanding-spheres** — Pulsing shell surfaces at varying phases.
-- **hilbert-curve** — Animated head tracing a space-filling curve through the cube (stacked 2D Hilbert per Z-slice), with optional faint full-curve rainbow.
+- **hilbert-curve** — Animated head tracing a true 3D Hilbert curve (Skilling's transposed-axes algorithm), with optional faint full-curve rainbow revealing the volumetric fractal.
 - **hypercube** — Rotating 4D tesseract (XW + ZW + XY rotations) with perspective projection; edges colored by W-depth.
 
 ### Audio-reactive
@@ -194,7 +194,7 @@ export const params = {
 export default {
   name: 'My Pattern',           // optional; defaults to the filename
   render(ctx, xyz) {
-    const { t, N, params, audio, power, utils } = ctx;
+    const { t, Nx, Ny, Nz, params, audio, power, utils } = ctx;
     const { x, y, z, u, v, w, cx, cy, cz, i } = xyz;
     // ...
     return [r, g, b];           // 0..255
@@ -206,10 +206,10 @@ export default {
 
 | Field         | Range       | Meaning                                        |
 |---------------|-------------|------------------------------------------------|
-| `x`, `y`, `z` | `0..N-1`    | Integer lattice indices                        |
-| `u`, `v`, `w` | `0..1`      | Normalised position within the cube            |
-| `cx`, `cy`, `cz` | `-1..1`  | Centered — zero is the cube's middle           |
-| `i`           | `0..N³-1`   | Flattened logical index (`x·N² + y·N + z`)     |
+| `x`, `y`, `z` | `0..Nx-1` / `0..Ny-1` / `0..Nz-1` | Integer lattice indices      |
+| `u`, `v`, `w` | `0..1`      | Normalised position per axis                   |
+| `cx`, `cy`, `cz` | `-1..1`  | Centered — zero is the volume's middle         |
+| `i`           | `0..Nx·Ny·Nz-1` | Flattened logical index (`x·Ny·Nz + y·Nz + z`) |
 
 ### Class API (stateful, particles / sims)
 
@@ -233,7 +233,10 @@ The runtime picks the class API if the default export is a constructor whose pro
   t:     number,              // seconds since pattern activated
   dt:    number,              // seconds since last frame
   frame: number,              // integer frame counter from 0
-  N:     number,              // cube edge length
+  Nx:    number,              // per-axis grid dimensions
+  Ny:    number,
+  Nz:    number,
+  N:     number,              // max(Nx, Ny, Nz) — convenience for cube-shaped math
   params: Record<string, any>,
   audio: {
     energy: number,           // [0, 1] RMS
@@ -356,12 +359,14 @@ The Audio panel shows a live log-spectrum canvas (drawn directly with `requestAn
 
 ## Wiring
 
-A wiring **address map** converts a logical `(x, y, z)` to its position in the physical LED strip (stream order). The map is a bijection over `[0, N³)`.
+A wiring **address map** converts a logical `(x, y, z)` to its position in the physical LED strip (stream order). The map is a bijection over `[0, Nx·Ny·Nz)` for any rectangular shape.
 
 The Structure panel exposes the knobs:
 
 | Setting            | Effect                                                  |
 |--------------------|---------------------------------------------------------|
+| `Nx`, `Ny`, `Nz`   | Per-axis voxel counts. Y is up; Z grows with panel depth|
+| `pitchMeters`      | Physical LED-to-LED spacing (single uniform value)      |
 | `layerOrder`       | bottom-up vs top-down (which Y first)                   |
 | `layerStart`       | entry corner per layer (00 / N0 / 0N / NN)              |
 | `rowDirection`     | within-layer inner counter runs along X or Z            |
@@ -412,7 +417,7 @@ Not a streaming transport: a Bake button that:
 3. Emits a PROGMEM 2-D `uint8_t` array plus a looping `.ino` sketch.
 4. Writes to `exports/<stem>_<timestamp>.ino` via the `write_export` Rust command.
 
-The baked sketch runs without a host. Live size estimate in the panel (`N³ × 3 × frames` bytes + header).
+The baked sketch runs without a host. Live size estimate in the panel (`Nx·Ny·Nz × 3 × frames` bytes + header). The generated `.ino` emits `#define NX`, `#define NY`, `#define NZ` so the firmware-side layout matches whatever shape you simulated.
 
 ---
 
@@ -467,7 +472,7 @@ src/
     ErrorBoundary.tsx             generic React boundary with reset
     ShortcutsHelp.tsx             keyboard-help modal (data from SHORTCUTS table)
     Library/LibraryPanel.tsx      pattern list + hot-reload status
-    Structure/StructurePanel.tsx  N, edge length, wiring config, overlay toggle
+    Structure/StructurePanel.tsx  Nx/Ny/Nz, pitch, wiring config, overlay toggle
     Params/ParamsPanel.tsx        color + schema-driven params + presets
     Power/PowerPanel.tsx          mode, budget, live pre/post ABL readouts
     Audio/AudioPanel.tsx          mic toggle, log-spectrum canvas, band readouts
@@ -483,7 +488,8 @@ src/
   core/
     audio.ts                      getUserMedia → AnalyserNode + beat detector
     colorPipeline.ts              gamma LUT + bakeFrame (float + bytes in one pass)
-    cubeGeometry.ts               buildPositions, buildCoords, ledCount, spacing
+    cubeGeometry.ts               CubeSpec {Nx,Ny,Nz,pitchMeters}, buildCoords,
+                                  ledCount, spacing, edges, voxelIndex
     keyboardShortcuts.ts          SHORTCUTS table + window keydown dispatcher
     patternApi.ts                 module contract + adapter for fn/class APIs
     patternRender.ts              calls pattern for one frame, writes patternBuf
@@ -541,7 +547,7 @@ cd src-tauri && cargo check
 The Vitest suites cover the parts where a bug would quietly corrupt output:
 
 - **`power.test.ts`** — brightness scaling, per-channel mA math, ABL scale factor at and over budget, color-order permutations.
-- **`wiring.test.ts`** — address-map bijection across every corner / serpentine combo; logical-to-stream round-trip.
+- **`wiring.test.ts`** — address-map bijection across every corner / serpentine combo for both cubic and non-cubic shapes (including 10×10×3 and all-distinct-prime shapes).
 - **`serial.test.ts`** — frame build, CRC-16/CCITT-FALSE vectors, status-reply parser on split payloads.
 
 No integration tests — the viewer lives in Tauri and driving it from CI is more pain than it's worth for a single-maintainer project. The pattern runtime is defensively try/caught at every entry point (`setup`, `update`, `render`) so a broken user pattern logs an error and disarms itself instead of crashing the app.
@@ -616,7 +622,7 @@ Out-of-scope-for-now items live in `TODO.md`:
 - E1.31 / sACN transport
 - MIDI input (map to pattern params + trigger beats)
 - Webcam input (brightness → audio-like reactivity; optional silhouette → color)
-- Non-cubic volumes (sphere, pyramid, arbitrary mesh with barycentric coords)
+- Non-rectangular volumes (sphere, pyramid, arbitrary mesh with barycentric coords) — rectangular `Nx × Ny × Nz` already works
 - Node-graph pattern editor
 - Pattern → C++ translation (ship a FastLED binary that runs the exact JS pattern)
 - GLSL-3D raymarching pattern primitive (exposes a ShaderToy-style authoring surface)

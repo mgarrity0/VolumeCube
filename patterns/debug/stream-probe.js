@@ -1,7 +1,7 @@
 // Stream Probe — wiring-verification pattern.
 //
 // Lights a single "head" voxel that sweeps through the cube in **logical**
-// index order (x * N² + y * N + z). Because the color pipeline applies the
+// index order (x*Ny*Nz + y*Nz + z). Because the color pipeline applies the
 // wiring address map after the pattern runs, when your wiring config is
 // correct the physical head traces the actual path your LED strip takes
 // through the cube. With the "Show wiring path" overlay turned on you can
@@ -23,13 +23,11 @@ export const params = {
 export default class StreamProbe {
   static name = 'Stream Probe';
 
-  setup(ctx) {
-    this.N = ctx.N;
-  }
+  setup() {}
 
   render(ctx, out) {
-    const { t, N, params, utils } = ctx;
-    const total = N * N * N;
+    const { t, Nx, Ny, Nz, params, utils } = ctx;
+    const total = Nx * Ny * Nz;
     const head = (t * params.speed) % total;
     const [hr, hg, hb] = utils.parseColor(params.headColor);
     const ramp = params.showRamp ? params.rampLevel : 0;

@@ -31,16 +31,16 @@ function pickColor(palette, utils) {
   return pal[(Math.random() * pal.length) | 0].slice();
 }
 
-function splat(out, N, x, y, z, r, g, b) {
+function splat(out, Nx, Ny, Nz, x, y, z, r, g, b) {
   const x0 = Math.floor(x), y0 = Math.floor(y), z0 = Math.floor(z);
   const fx = x - x0, fy = y - y0, fz = z - z0;
   for (let dx = 0; dx <= 1; dx++) {
     for (let dy = 0; dy <= 1; dy++) {
       for (let dz = 0; dz <= 1; dz++) {
         const xx = x0 + dx, yy = y0 + dy, zz = z0 + dz;
-        if (xx < 0 || xx >= N || yy < 0 || yy >= N || zz < 0 || zz >= N) continue;
+        if (xx < 0 || xx >= Nx || yy < 0 || yy >= Ny || zz < 0 || zz >= Nz) continue;
         const w = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy) * (dz ? fz : 1 - fz);
-        const idx = (xx * N + yy) * N + zz;
+        const idx = (xx * Ny + yy) * Nz + zz;
         out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + r * w);
         out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + g * w);
         out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + b * w);
@@ -52,8 +52,7 @@ function splat(out, N, x, y, z, r, g, b) {
 export default class ChrysanthemumFireworks {
   static name = 'Fireworks (Chrysanthemum)';
 
-  setup(ctx) {
-    this.N = ctx.N;
+  setup() {
     this.rockets = [];
     this.primaries = [];
     this.secondaries = [];
@@ -61,9 +60,10 @@ export default class ChrysanthemumFireworks {
   }
 
   launch(ctx) {
-    const { N, params, utils } = ctx;
-    const half = (N - 1) / 2;
-    const targetY = N * (0.55 + Math.random() * 0.35);
+    const { Nx, Ny, Nz, params, utils } = ctx;
+    const halfX = (Nx - 1) / 2;
+    const halfZ = (Nz - 1) / 2;
+    const targetY = Ny * (0.55 + Math.random() * 0.35);
     const vy = Math.sqrt(2 * params.gravity * targetY);
     // Ring plane normal — biased toward vertical so the ring presents face-on.
     const nx = (Math.random() - 0.5) * 0.6;
@@ -71,9 +71,9 @@ export default class ChrysanthemumFireworks {
     const nz = (Math.random() - 0.5) * 0.6;
     const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz);
     this.rockets.push({
-      x: half + (Math.random() - 0.5) * N * 0.4,
+      x: halfX + (Math.random() - 0.5) * Nx * 0.4,
       y: 0,
-      z: half + (Math.random() - 0.5) * N * 0.4,
+      z: halfZ + (Math.random() - 0.5) * Nz * 0.4,
       vx: (Math.random() - 0.5) * 0.6,
       vy,
       vz: (Math.random() - 0.5) * 0.6,
@@ -136,8 +136,7 @@ export default class ChrysanthemumFireworks {
   }
 
   update(ctx) {
-    const { dt, N, params } = ctx;
-    if (this.N !== N) this.setup(ctx);
+    const { dt, params } = ctx;
 
     this.launchAcc += params.launchRate * dt;
     while (this.launchAcc >= 1) { this.launch(ctx); this.launchAcc -= 1; }
@@ -173,26 +172,26 @@ export default class ChrysanthemumFireworks {
   }
 
   render(ctx, out) {
-    const { N } = ctx;
+    const { Nx, Ny, Nz } = ctx;
     out.fill(0);
 
     for (const r of this.rockets) {
       const [cr, cg, cb] = r.color;
-      splat(out, N, r.x, r.y, r.z, cr, cg, cb);
-      splat(out, N, r.x - r.vx * 0.04, r.y - r.vy * 0.04, r.z - r.vz * 0.04,
+      splat(out, Nx, Ny, Nz, r.x, r.y, r.z, cr, cg, cb);
+      splat(out, Nx, Ny, Nz, r.x - r.vx * 0.04, r.y - r.vy * 0.04, r.z - r.vz * 0.04,
             cr * 0.35, cg * 0.35, cb * 0.35);
     }
     for (const s of this.primaries) {
       const t = 1 - s.age / s.life;
       const k = t * t;
-      splat(out, N, s.x, s.y, s.z, s.color[0] * k, s.color[1] * k, s.color[2] * k);
+      splat(out, Nx, Ny, Nz, s.x, s.y, s.z, s.color[0] * k, s.color[1] * k, s.color[2] * k);
     }
     for (const s of this.secondaries) {
       // Secondaries flash brighter briefly — the "sparkle" accent on a chrysanthemum.
       const t = 1 - s.age / s.life;
       const k = Math.min(1, t * 1.3);
       const bright = k * k;
-      splat(out, N, s.x, s.y, s.z, s.color[0] * bright, s.color[1] * bright, s.color[2] * bright);
+      splat(out, Nx, Ny, Nz, s.x, s.y, s.z, s.color[0] * bright, s.color[1] * bright, s.color[2] * bright);
     }
   }
 }

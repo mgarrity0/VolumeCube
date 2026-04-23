@@ -8,7 +8,7 @@
 - Multi-ESP32 partitioning (v1 assumes a single controller)
 - Timeline / scrubbing / recording / video export
 - Cloud sync / shareable URLs
-- Arbitrary (non-cubic) volumes
+- Non-rectangular volumes (sphere, pyramid, arbitrary mesh) — rectangular Nx×Ny×Nz is supported
 - Mesh sag visualization
 - Node-graph param editor
 - Pattern-to-C++ code translation for FastLED export (v1 bakes frames only)

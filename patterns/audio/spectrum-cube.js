@@ -15,7 +15,7 @@ export default {
   name: 'Spectrum Cube',
 
   render(ctx, xyz) {
-    const { params, audio, utils, N } = ctx;
+    const { params, audio, utils } = ctx;
     const { u, v, w } = xyz;
 
     // Scroll axis. 's' is the "depth" along the chosen axis (0=newest).

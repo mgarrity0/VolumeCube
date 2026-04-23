@@ -29,7 +29,7 @@ export default class RotatingCube {
   }
 
   render(ctx, out) {
-    const { N, params, utils } = ctx;
+    const { Nx, Ny, Nz, params, utils } = ctx;
     const [rR, rG, rB] = utils.parseColor(params.color);
     const cax = this.cax, sax = this.sax;
     const cay = this.cay, say = this.say;
@@ -37,15 +37,17 @@ export default class RotatingCube {
     const half = params.size;
     const thickness = params.thickness;
     const edgesOnly = params.edgesOnly;
-    const inv = N > 1 ? 1 / (N - 1) : 0;
+    const invX = Nx > 1 ? 1 / (Nx - 1) : 0;
+    const invY = Ny > 1 ? 1 / (Ny - 1) : 0;
+    const invZ = Nz > 1 ? 1 / (Nz - 1) : 0;
 
     let idx = 0;
-    for (let xi = 0; xi < N; xi++) {
-      const cx = xi * inv * 2 - 1;
-      for (let yi = 0; yi < N; yi++) {
-        const cy = yi * inv * 2 - 1;
-        for (let zi = 0; zi < N; zi++) {
-          const cz = zi * inv * 2 - 1;
+    for (let xi = 0; xi < Nx; xi++) {
+      const cx = xi * invX * 2 - 1;
+      for (let yi = 0; yi < Ny; yi++) {
+        const cy = yi * invY * 2 - 1;
+        for (let zi = 0; zi < Nz; zi++) {
+          const cz = zi * invZ * 2 - 1;
           // Rx
           const y1 = cy * cax - cz * sax;
           const z1 = cy * sax + cz * cax;

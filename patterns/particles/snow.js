@@ -14,18 +14,18 @@ export default class Snow {
   static name = 'Snow';
 
   setup(ctx) {
-    const { N, params } = ctx;
-    const target = Math.max(1, Math.round(N * N * params.density));
+    const { Nx, Ny, Nz, params } = ctx;
+    const target = Math.max(1, Math.round(Nx * Nz * params.density));
     this.flakes = [];
-    for (let i = 0; i < target; i++) this.flakes.push(this.newFlake(N));
-    this.N = N;
+    for (let i = 0; i < target; i++) this.flakes.push(this.newFlake(Nx, Ny, Nz));
     this.t = 0;
   }
 
-  newFlake(N, y = N + Math.random() * N) {
+  newFlake(Nx, Ny, Nz, y) {
+    if (y === undefined) y = Ny + Math.random() * Ny;
     return {
-      x: Math.random() * (N - 1),
-      z: Math.random() * (N - 1),
+      x: Math.random() * (Nx - 1),
+      z: Math.random() * (Nz - 1),
       y,
       phase: Math.random() * Math.PI * 2,
       wobble: 0.6 + Math.random() * 0.8,
@@ -33,25 +33,24 @@ export default class Snow {
   }
 
   update(ctx) {
-    const { dt, params, N } = ctx;
-    if (this.N !== N) this.setup(ctx);
+    const { dt, params, Nx, Ny, Nz } = ctx;
     this.t += dt;
 
-    const target = Math.max(1, Math.round(N * N * params.density));
-    while (this.flakes.length < target) this.flakes.push(this.newFlake(N));
+    const target = Math.max(1, Math.round(Nx * Nz * params.density));
+    while (this.flakes.length < target) this.flakes.push(this.newFlake(Nx, Ny, Nz));
     while (this.flakes.length > target) this.flakes.pop();
 
     for (const f of this.flakes) {
       f.y -= params.speed * dt * f.wobble;
       if (f.y < -0.5) {
-        const nf = this.newFlake(N, N + 0.5 + Math.random() * 2);
+        const nf = this.newFlake(Nx, Ny, Nz, Ny + 0.5 + Math.random() * 2);
         f.x = nf.x; f.z = nf.z; f.y = nf.y; f.phase = nf.phase; f.wobble = nf.wobble;
       }
     }
   }
 
   render(ctx, out) {
-    const { N, params, utils } = ctx;
+    const { Nx, Ny, Nz, params, utils } = ctx;
     out.fill(0);
     const [tr, tg, tb] = utils.mix(params.tint, params.tint, 0);
 
@@ -62,17 +61,17 @@ export default class Snow {
       // Trilinear splat across the 8 nearest voxels.
       const x0 = Math.floor(xF), y0 = Math.floor(f.y), z0 = Math.floor(zF);
       const fx = xF - x0, fy = f.y - y0, fz = zF - z0;
-      const depthFade = utils.clamp(0.55 + f.y / N * 0.5, 0.3, 1);
+      const depthFade = utils.clamp(0.55 + f.y / Ny * 0.5, 0.3, 1);
       for (let dx = 0; dx <= 1; dx++) {
         for (let dy = 0; dy <= 1; dy++) {
           for (let dz = 0; dz <= 1; dz++) {
             const x = x0 + dx, y = y0 + dy, z = z0 + dz;
-            if (x < 0 || x >= N || y < 0 || y >= N || z < 0 || z >= N) continue;
+            if (x < 0 || x >= Nx || y < 0 || y >= Ny || z < 0 || z >= Nz) continue;
             const wx = dx ? fx : 1 - fx;
             const wy = dy ? fy : 1 - fy;
             const wz = dz ? fz : 1 - fz;
             const w = wx * wy * wz * depthFade;
-            const idx = (x * N + y) * N + z;
+            const idx = (x * Ny + y) * Nz + z;
             out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + tr * w);
             out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + tg * w);
             out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + tb * w);
