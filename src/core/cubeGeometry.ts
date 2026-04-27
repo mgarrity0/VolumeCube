@@ -13,7 +13,15 @@
 // Position in meters, using a single pitch (physical LED-to-LED spacing):
 //   pos.x = (x - (Nx-1)/2) * pitch
 //   pos.y = (y - (Ny-1)/2) * pitch
-//   pos.z = (z - (Nz-1)/2) * pitch
+//   pos.z = ((Nz-1)/2 - z) * pitch    -- flipped: z=0 sits at the FRONT face
+//
+// Z convention: voxel z=0 maps to +world-Z (the face the default "Front"
+// camera looks at). This matches the user's mental model — adding panels
+// extends the cube *backward* (toward -Z), and a wiring config that
+// starts at z=0 has its start LED on the visible front face. Logical
+// indices, normalized w, and centered cz are unchanged; only the visual
+// Z position is mirrored. Patterns that lerp along w/cz still work; they
+// just render mirrored along Z, which is the intended fix.
 
 export type CubeSpec = {
   Nx: number;
@@ -105,7 +113,7 @@ export function buildCoords(spec: CubeSpec): VoxelCoords {
       for (let z = 0; z < Nz; z++) {
         positions[i * 3 + 0] = x * p - halfX;
         positions[i * 3 + 1] = y * p - halfY;
-        positions[i * 3 + 2] = z * p - halfZ;
+        positions[i * 3 + 2] = halfZ - z * p;
         xs[i] = x;
         ys[i] = y;
         zs[i] = z;

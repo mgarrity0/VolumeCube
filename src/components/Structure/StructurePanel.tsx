@@ -1,6 +1,6 @@
 import { useAppStore } from '../../state/store';
 import { edges, ledCount } from '../../core/cubeGeometry';
-import type { LayerOrder, LayerStart, RowDirection } from '../../core/wiring';
+import type { ChainStyle, LayerOrder, LayerStart, RowDirection } from '../../core/wiring';
 
 // StructurePanel covers both the physical dimensions (Nx/Ny/Nz, pitch)
 // and the wiring order the LED data stream follows through the cube.
@@ -83,20 +83,37 @@ export function StructurePanel() {
 
       <h3>Wiring</h3>
       <div className="field">
-        <span>Layer order</span>
+        <span>Wiring style</span>
+        <select
+          value={wiring.chainStyle}
+          onChange={(e) => patchWiring({ chainStyle: e.target.value as ChainStyle })}
+          title="Panels: Y outermost — strip fills one Nx×Nz layer at a time. Columns: Y innermost — strip walks each (X,Z) column's full height before moving sideways."
+        >
+          <option value="panels">Panels (Y-slices)</option>
+          <option value="columns">Columns (vertical chains)</option>
+        </select>
+      </div>
+      <div className="field">
+        <span>{wiring.chainStyle === 'columns' ? 'Column direction' : 'Layer order'}</span>
         <select
           value={wiring.layerOrder}
           onChange={(e) => patchWiring({ layerOrder: e.target.value as LayerOrder })}
+          title={
+            wiring.chainStyle === 'columns'
+              ? 'First column travels bottom-up (start at y=0) or top-down (start at y=Ny-1).'
+              : 'Strip enters the bottom (y=0) or top (y=Ny-1) layer first.'
+          }
         >
           <option value="bottom-up">Bottom-up</option>
           <option value="top-down">Top-down</option>
         </select>
       </div>
       <div className="field">
-        <span>Layer start</span>
+        <span>Entry corner</span>
         <select
           value={wiring.layerStart}
           onChange={(e) => patchWiring({ layerStart: e.target.value as LayerStart })}
+          title="Which (X, Z) corner the strip enters from."
         >
           <option value="corner-00">Corner (0, 0)</option>
           <option value="corner-N0">Corner (Nx-1, 0)</option>
@@ -105,29 +122,44 @@ export function StructurePanel() {
         </select>
       </div>
       <div className="field">
-        <span>Row direction</span>
+        <span>{wiring.chainStyle === 'columns' ? 'Chain columns along' : 'Row direction'}</span>
         <select
           value={wiring.rowDirection}
           onChange={(e) => patchWiring({ rowDirection: e.target.value as RowDirection })}
+          title={
+            wiring.chainStyle === 'columns'
+              ? 'Which axis chains columns first (the column-walk direction).'
+              : 'Within a layer, do rows run along X or Z?'
+          }
         >
           <option value="x-major">X-major</option>
           <option value="z-major">Z-major</option>
         </select>
       </div>
       <div className="field">
-        <span>Serpentine rows</span>
+        <span>{wiring.chainStyle === 'columns' ? 'Snake Y (alternate up/down)' : 'Serpentine rows'}</span>
         <input
           type="checkbox"
           checked={wiring.serpentine}
           onChange={(e) => patchWiring({ serpentine: e.target.checked })}
+          title={
+            wiring.chainStyle === 'columns'
+              ? 'ON: flip column direction every other column (snake the strip up-down). OFF: every column starts at the same Y end ("jumps back to top" — your build).'
+              : 'Flip the inner row direction every other row.'
+          }
         />
       </div>
       <div className="field">
-        <span>Serpentine layers</span>
+        <span>{wiring.chainStyle === 'columns' ? 'Zigzag column-walk' : 'Serpentine layers'}</span>
         <input
           type="checkbox"
           checked={wiring.layerSerpentine}
           onChange={(e) => patchWiring({ layerSerpentine: e.target.checked })}
+          title={
+            wiring.chainStyle === 'columns'
+              ? 'Flip the column-walk direction every other XZ row.'
+              : 'Flip the entry corner every other layer.'
+          }
         />
       </div>
       <div className="field">

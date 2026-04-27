@@ -23,7 +23,7 @@ export function usePatternHost() {
 
   useEffect(() => {
     if (!isTauri()) {
-      // Web-only `pnpm dev` mode — no backend; show an empty list.
+      // Web-only `npm run dev` mode — no backend; show an empty list.
       setAvailable([]);
       return;
     }

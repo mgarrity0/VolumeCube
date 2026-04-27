@@ -43,6 +43,7 @@ describe('buildAddressMap', () => {
           for (const serpentine of [false, true]) {
             for (const layerSerpentine of [false, true]) {
               const cfg: WiringConfig = {
+                chainStyle: 'panels',
                 layerOrder, layerStart, rowDirection, serpentine, layerSerpentine,
               };
               const map = buildAddressMap(cfg, 4, 4, 4);
@@ -74,6 +75,7 @@ describe('buildAddressMap', () => {
             for (const serpentine of [false, true]) {
               for (const layerSerpentine of [false, true]) {
                 const cfg: WiringConfig = {
+                  chainStyle: 'panels',
                   layerOrder, layerStart, rowDirection, serpentine, layerSerpentine,
                 };
                 const map = buildAddressMap(cfg, Nx, Ny, Nz);
@@ -95,5 +97,67 @@ describe('buildAddressMap', () => {
   it('handles a single-layer shape (Ny=1)', () => {
     const map = buildAddressMap(defaultWiringConfig, 10, 1, 10);
     assertBijection(map, 10, 1, 10);
+  });
+
+  it('column-mode is a bijection across every toggle permutation and shape', () => {
+    const shapes: Array<[number, number, number]> = [
+      [10, 10, 10],
+      [10, 10, 3],
+      [4, 8, 6],
+      [3, 5, 7],
+      [1, 4, 1],
+    ];
+    const layerOrders: WiringConfig['layerOrder'][] = ['bottom-up', 'top-down'];
+    const starts: WiringConfig['layerStart'][] = [
+      'corner-00', 'corner-N0', 'corner-0N', 'corner-NN',
+    ];
+    const rowDirs: WiringConfig['rowDirection'][] = ['x-major', 'z-major'];
+    for (const [Nx, Ny, Nz] of shapes) {
+      for (const layerOrder of layerOrders) {
+        for (const layerStart of starts) {
+          for (const rowDirection of rowDirs) {
+            for (const serpentine of [false, true]) {
+              for (const layerSerpentine of [false, true]) {
+                const cfg: WiringConfig = {
+                  chainStyle: 'columns',
+                  layerOrder, layerStart, rowDirection, serpentine, layerSerpentine,
+                };
+                const map = buildAddressMap(cfg, Nx, Ny, Nz);
+                assertBijection(map, Nx, Ny, Nz);
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("column-mode 'down each column, jump to top' walks Y as the fast axis", () => {
+    // The user's described topology: strip enters top-front-left, runs DOWN
+    // (Y from Ny-1 to 0), jumps back to the top of the next column, etc.
+    const cfg: WiringConfig = {
+      chainStyle: 'columns',
+      layerOrder: 'top-down',     // start each column at top, go down
+      layerStart: 'corner-00',
+      rowDirection: 'x-major',    // chain columns along X first, then Z
+      serpentine: false,          // ALWAYS restart at top (no Y snake)
+      layerSerpentine: false,
+    };
+    const Nx = 4, Ny = 5, Nz = 3;
+    const map = buildAddressMap(cfg, Nx, Ny, Nz);
+    assertBijection(map, Nx, Ny, Nz);
+
+    // First Ny stream slots should be column (x=0, z=0) walking Y top→bottom.
+    const streamToLogical = new Uint32Array(Nx * Ny * Nz);
+    for (let logical = 0; logical < map.length; logical++) {
+      streamToLogical[map[logical]] = logical;
+    }
+    for (let yi = 0; yi < Ny; yi++) {
+      const y = Ny - 1 - yi;
+      const expected = 0 * Ny * Nz + y * Nz + 0;
+      expect(streamToLogical[yi]).toBe(expected);
+    }
+    // Slot Ny should be the top of the second column (x=1, z=0).
+    expect(streamToLogical[Ny]).toBe(1 * Ny * Nz + (Ny - 1) * Nz + 0);
   });
 });

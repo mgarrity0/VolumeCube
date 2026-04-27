@@ -253,7 +253,7 @@ export function OutputPanel() {
               max={48}
               step={1}
               value={output.exportPin}
-              onChange={(e) => patchOutput({ exportPin: Math.max(0, Number(e.target.value) || 6) })}
+              onChange={(e) => patchOutput({ exportPin: Math.max(0, Number(e.target.value) || 16) })}
             />
           </div>
           <div className="stat-line">

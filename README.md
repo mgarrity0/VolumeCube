@@ -2,6 +2,8 @@
 
 **A volumetric LED-cube simulator and pattern-authoring tool.** Designed around a 10×10×10 WS2815 cube driven by an ESP32, and parameterised over independent `Nx × Ny × Nz` + physical pitch — the same stack works for non-cubic builds (e.g. a 10×10×3 stack of panels) and scales up as you add more hardware.
 
+> **Platform:** Windows-only. All commands and paths in this README assume Windows + `cmd`/PowerShell. Other platforms aren't tested.
+
 Write a pattern in plain JavaScript. Drop it into `patterns/`. It hot-reloads and starts rendering in a React-Three-Fiber viewport with bloom glow and billboarded-shader LEDs. Tune color, power, wiring, and audio-reactivity from side panels. Stream frames to real hardware over WLED UDP (DDP) or USB serial, or bake them into a standalone FastLED `.ino` that runs without a host.
 
 Built on **Tauri 2**, so it ships as a single native binary — no web server, no Electron shell — with direct access to serial ports and UDP sockets.
@@ -75,37 +77,43 @@ Built on **Tauri 2**, so it ships as a single native binary — no web server, n
 | Native             | Rust (notify, serialport, UdpSocket, tokio)      |
 | Firmware           | Arduino + FastLED (ESP32 target, WS2815)         |
 | Testing            | Vitest (unit) + `tsc --noEmit` + `cargo check`   |
-| Package manager    | pnpm                                             |
+| Package manager    | npm                                              |
+| Target OS          | Windows (MSI installer)                          |
 
 ---
 
 ## Quick start
 
-```bash
-pnpm install
-pnpm tauri dev
+Prereqs: **Node 18+**, **Rust (MSVC toolchain)** via [rustup](https://rustup.rs/), **Visual Studio Build Tools** (the C++ workload — needed by the Rust MSVC linker), and **WebView2** (preinstalled on Windows 10/11 — Tauri uses it).
+
+Commands below are PowerShell. Run them one at a time (don't paste the whole block).
+
+```powershell
+npm install
+npm run tauri dev
 ```
 
-First launch takes a minute or two for the Rust crate compile. Subsequent launches are instant. The dev server hot-reloads React; patterns under `patterns/` hot-reload via the `notify` watcher without restart.
+`npm install` is a first-time / post-pull step. `npm run tauri dev` launches the native Tauri window — first launch takes a minute or two for the Rust crate compile, subsequent launches are instant. Vite hot-reloads React; patterns under `patterns/` hot-reload via the `notify` watcher without restart.
 
-### If `pnpm` isn't on your PATH (Windows)
+Other useful scripts:
 
-Corepack ships with Node 16.9+ but the `pnpm` shim often isn't on PATH after `npm install -g pnpm`. Either:
-
-```bash
-npm run tauri dev        # uses the local npm-script wrapper
-# or
-corepack pnpm tauri dev  # uses the node-bundled shim
-```
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server only (browser, no Tauri / no serial / no FS) |
+| `npm run tauri dev` | Native Tauri window — needed for serial, file IO, native dialogs |
+| `npm run build` | `tsc` + `vite build` — type-checks the whole project |
+| `npm run tauri build` | Produces the MSI installer |
 
 ### Run the tests
 
-```bash
-pnpm test           # one-shot
-pnpm test:watch     # watch mode
-tsc --noEmit        # type check
-cd src-tauri && cargo check
+```powershell
+npm test                # Vitest, one-shot
+npm run test:watch      # Vitest, watch mode
+npx tsc --noEmit        # TypeScript strict-mode check
+cd src-tauri; cargo check; cd ..   # Rust check
 ```
+
+(In PowerShell, chain commands with `;` — `&&` only works in PowerShell 7+.)
 
 ---
 
@@ -361,19 +369,32 @@ The Audio panel shows a live log-spectrum canvas (drawn directly with `requestAn
 
 A wiring **address map** converts a logical `(x, y, z)` to its position in the physical LED strip (stream order). The map is a bijection over `[0, Nx·Ny·Nz)` for any rectangular shape.
 
-The Structure panel exposes the knobs:
+### Wiring style: panels vs columns
 
-| Setting            | Effect                                                  |
-|--------------------|---------------------------------------------------------|
-| `Nx`, `Ny`, `Nz`   | Per-axis voxel counts. Y is up; Z grows with panel depth|
-| `pitchMeters`      | Physical LED-to-LED spacing (single uniform value)      |
-| `layerOrder`       | bottom-up vs top-down (which Y first)                   |
-| `layerStart`       | entry corner per layer (00 / N0 / 0N / NN)              |
-| `rowDirection`     | within-layer inner counter runs along X or Z            |
-| `serpentine`       | flip inner counter every other row                      |
-| `layerSerpentine`  | flip entry corner every other layer                     |
+Two top-level topologies cover the common builds. Pick one in the Structure panel:
 
-Turn on the wiring-path overlay (`W`) and tweak the knobs — the polyline redraws in real time. Once you're confident it matches your physical build, it's safe to stream or bake.
+- **Panels (Y-slices)** — Y is the *outermost* axis. The strip fills one full Nx×Nz layer, then enters the next layer. Right for builds where each Y-level is a self-contained 2D mesh and the layers are chained at one corner.
+- **Columns (vertical chains)** — Y is the *innermost* (fast) axis. The strip walks one (X, Z) column's full height, then jumps to the next column. Right for builds where vertical strip-pieces are chained at top and bottom. *("down each column, jump to the top of the next column" — exactly this mode with `Snake Y` off.)*
+
+### Knobs
+
+| Setting | Panels mode | Columns mode |
+|---|---|---|
+| `Nx`, `Ny`, `Nz`   | Per-axis voxel counts (Y is up) | same |
+| `pitchMeters`      | Physical LED-to-LED spacing | same |
+| Wiring style       | — | — |
+| Layer order / Column direction | which Y-slice first (bottom-up / top-down) | first column travels bottom-up or top-down |
+| Entry corner       | which (X, Z) corner the strip enters from | same |
+| Row direction / Chain columns along | inner row axis (X-major / Z-major) | which axis chains columns first |
+| Serpentine / Snake Y | flip inner row each layer-row | flip Y direction every other column |
+| Serpentine layers / Zigzag column-walk | flip entry corner every other layer | flip column-walk direction every other XZ row |
+
+### Verifying against your real cube
+
+1. Press **`W`** to enable the wiring-path overlay — polyline + arrowheads showing data-flow direction (arrows colored along the same red→blue stream gradient as the line).
+2. Switch to the **`stream-probe`** debug pattern (Library → Debug). It lights one bright voxel that walks along the strip in stream order.
+3. Toggle the wiring settings until the polyline matches the route the strip takes through your build, **and** the moving probe rides along the polyline in the same direction the data enters.
+4. Save a preset; every other pattern is now correctly oriented.
 
 The `stream-probe` debug pattern is the intended pairing: it sweeps a bright head along the logical index order, so with the overlay on you can watch the head ride along the polyline and spot mismatches instantly.
 
@@ -538,10 +559,10 @@ exports/                          output directory for baked .ino sketches
 
 Three kinds of check, none of them slow:
 
-```bash
-pnpm test            # Vitest — unit tests for pure core
-tsc --noEmit         # TypeScript strict-mode gate
-cd src-tauri && cargo check
+```powershell
+npm test                            # Vitest — unit tests for pure core
+npx tsc --noEmit                    # TypeScript strict-mode gate
+cd src-tauri; cargo check; cd ..    # Rust crate check
 ```
 
 The Vitest suites cover the parts where a bug would quietly corrupt output:
@@ -556,13 +577,13 @@ No integration tests — the viewer lives in Tauri and driving it from CI is mor
 
 ## Building a release
 
-```bash
-pnpm tauri build
+```powershell
+npm run tauri build
 ```
 
-Produces a signed single-binary installer under `src-tauri/target/release/bundle/`. On Windows that's an MSI; on macOS a DMG; on Linux a `.deb` + `.AppImage`.
+Produces an **MSI installer** under `src-tauri\target\release\bundle\msi\` (and a raw `.exe` under `src-tauri\target\release\`).
 
-The shipped binary looks for `patterns/` under the OS-standard app-data dir (`%APPDATA%/VolumeCube/patterns` on Windows, `~/Library/Application Support/VolumeCube/patterns` on macOS, `~/.config/volumecube/patterns` on Linux). The dev build uses the repo's `patterns/` directly — `patterns_root` is exposed as a Tauri command so the UI knows where to drop new files.
+The shipped binary looks for `patterns/` under `%APPDATA%\VolumeCube\patterns`. The dev build uses the repo's `patterns/` directly — `patterns_root` is exposed as a Tauri command so the UI knows where to drop new files.
 
 ---
 
@@ -593,7 +614,9 @@ The shipped binary looks for `patterns/` under the OS-standard app-data dir (`%A
 
 **Black viewport after dev rebuild.** React 18 strict-mode selector cache issue. If a `useAppStore` selector returns a fresh `{}` per call, `useSyncExternalStore` bails. Lift the sentinel to a module-level constant.
 
-**`pnpm` not recognized (Windows).** Corepack's shim is commonly off-PATH. Use `npm run tauri dev` or `corepack pnpm tauri dev`.
+**`cargo` / `link.exe` errors during `npm run tauri dev`.** The Rust MSVC toolchain needs Visual Studio Build Tools with the "Desktop development with C++" workload. Install it from [the VS Build Tools page](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022), then re-open your terminal so the linker is on PATH.
+
+**WebView2 missing.** Comes preinstalled on Windows 10 (1803+) and 11. If you're on an old image, install the Evergreen runtime from Microsoft.
 
 ---
 

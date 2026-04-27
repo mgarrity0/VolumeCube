@@ -36,7 +36,9 @@ export const defaultOutputConfig: OutputConfig = {
   serialBaud: 921600,
   exportSeconds: 5,
   exportFps: 30,
-  exportPin: 6,
+  // Default to GPIO 16 — the QuinLED Dig-Quad's Q1 output. Other common
+  // ESP32 LED pins: 2 (most dev boards), 18, 19. Override per project.
+  exportPin: 16,
   sendIntervalMs: 20, // 50 fps cap
 };
 
