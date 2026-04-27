@@ -146,7 +146,7 @@ All three go through drei's `OrbitControls`. Camera preset buttons (or `1`–`4`
 
 ## Pattern library
 
-Twenty-two built-in patterns organised by category. All are plain `.js` files under `patterns/<category>/` — read them, fork them, delete them, write new ones.
+Thirty built-in patterns organised by category. All are plain `.js` files under `patterns/<category>/` — read them, fork them, delete them, write new ones.
 
 ### Classics
 
@@ -157,6 +157,13 @@ Twenty-two built-in patterns organised by category. All are plain `.js` files un
 - **metaballs** — 1/r² scalar field with smoothstep isosurface and per-blob hue blending at merge seams.
 - **life3d** — Bays' B5678/S45678 and 4 other rules on the 26-cell Moore neighborhood (toroidal wrap). Age-based coloring + auto-reseed.
 - **tetris3d** — Auto-playing 3D Tetris with 6 tetracubes (including a 3D-only tripod). Full XZ-layer clears flash white then collapse.
+- **harmonic-blob** — Implicit sphere with radius modulated per-direction by a sum of low-order real spherical harmonics; each mode oscillates at its own frequency so the deformation is organic but never quite repeats.
+- **smiley-face** — Yellow ball that spins and looks around. Eyes and curved smile are painted onto the front-facing hemisphere; non-commensurate yaw + pitch wobble so the head visibly turns and glances.
+- **big-eye** — Sclera/iris/pupil rendered on the front of a sphere; gaze wobbles, pupil dilates, eyelids close periodically to blink. `filled` mode keeps the interior skin-coloured so the eye reads as a surface.
+- **jellyfish** — Pulsing oblate bell with outward-flaring skirt and eight wavy tentacles trailing below; bioluminescent hue band drifts along the body axis.
+- **lightning** — Top-down branching strikes with secondary offshoots, sharp flash + exponential decay, and a brief ambient flash that brightens the whole cube during the peak.
+- **plasma-globe** — Bright core at the cube centre with continuously-discharging jagged tendrils branching out to the faces and fading away.
+- **pong-3d** — AI-vs-AI volley between two flat paddles on the Z faces; paddles aim at predicted impact (rate-limited by skill), and off-centre hits add english so rallies diverge over time.
 
 ### Particles
 
@@ -174,6 +181,7 @@ Twenty-two built-in patterns organised by category. All are plain `.js` files un
 - **expanding-spheres** — Pulsing shell surfaces at varying phases.
 - **hilbert-curve** — Animated head tracing a true 3D Hilbert curve (Skilling's transposed-axes algorithm), with optional faint full-curve rainbow revealing the volumetric fractal.
 - **hypercube** — Rotating 4D tesseract (XW + ZW + XY rotations) with perspective projection; edges colored by W-depth.
+- **lorenz-attractor** — Particle traces the canonical Lorenz butterfly with a fading rainbow ribbon. ODE integrated in many substeps per frame so the trajectory stays continuous at any speed.
 
 ### Audio-reactive
 
@@ -531,13 +539,15 @@ src/
 
 patterns/
   audio/                          beat-pulse, spectrum-cube, vu-bars
-  classics/                       fire, noise-field, plasma, rainbow-wave,
-                                  metaballs, life3d, tetris3d
+  classics/                       big-eye, fire, harmonic-blob, jellyfish,
+                                  life3d, lightning, metaballs, noise-field,
+                                  plasma, plasma-globe, pong-3d, rainbow-wave,
+                                  smiley-face, tetris3d
   debug/                          stream-probe
   particles/                      fireworks, fireworks-chrysanthemum, meteors,
                                   rain, snow, sparks
-  spatial/                        expanding-spheres, rotating-cube, sweeping-plane,
-                                  hypercube, hilbert-curve
+  spatial/                        expanding-spheres, hilbert-curve, hypercube,
+                                  lorenz-attractor, rotating-cube, sweeping-plane
 
 src-tauri/
   src/lib.rs                      Tauri commands (wled_send, serial_*, snapshot_*,
