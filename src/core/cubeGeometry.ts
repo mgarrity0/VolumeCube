@@ -1,53 +1,105 @@
-// Geometry for the Nx × Ny × Nz voxel grid.
+// Geometry for the LED layout. Two top-level shapes covered by a tagged
+// union so the rest of the engine can stay agnostic:
 //
-// Y is up. The physical build stacks 2D panels along Z, so adding more
-// panels grows Nz. Nx/Ny are the per-panel grid. All three axes may
-// differ — a single rig might be 10×10×3 while another is 8×16×8.
+//   - 'lattice'   : the original Nx × Ny × Nz integer voxel grid.
+//   - 'fibonacci' : a Vogel-spiral disc (no central hot spot) with K LEDs
+//                   hanging straight down from each disc node. Logical
+//                   index = n*K + k, stream order = same. Wiring is
+//                   "down each strand, jump to the top of the next" —
+//                   identical topology to the lattice column-mode, just
+//                   reordered by spiral index instead of grid (X,Z).
 //
-// Logical voxel index = x*Ny*Nz + y*Nz + z (x-major, then y, then z).
-// The address map in wiring.ts maps logical→stream for the wire; this
-// file only deals with visual positions, so the ordering we pick here
-// is whatever is convenient for patterns + the R3F primitive.
+// Pattern code sees xyz = {x, y, z, u, v, w, cx, cy, cz, i} for each LED
+// regardless of layout. cx/cy/cz are world-position-derived in [-1, 1]
+// per axis, so spatial patterns (metaballs, expanding-spheres, harmonic-
+// blob, …) work on either shape.
 //
-// Pattern code sees xyz = {x, y, z, u, v, w, cx, cy, cz, i} for each LED.
-// Position in meters, using a single pitch (physical LED-to-LED spacing):
-//   pos.x = (x - (Nx-1)/2) * pitch
-//   pos.y = (y - (Ny-1)/2) * pitch
-//   pos.z = ((Nz-1)/2 - z) * pitch    -- flipped: z=0 sits at the FRONT face
-//
-// Z convention: voxel z=0 maps to +world-Z (the face the default "Front"
-// camera looks at). This matches the user's mental model — adding panels
-// extends the cube *backward* (toward -Z), and a wiring config that
-// starts at z=0 has its start LED on the visible front face. Logical
-// indices, normalized w, and centered cz are unchanged; only the visual
-// Z position is mirrored. Patterns that lerp along w/cz still work; they
-// just render mirrored along Z, which is the intended fix.
+// In Fibonacci mode we expose synthetic grid dims so RenderContext stays
+// shaped {Nx, Ny, Nz}: Nx = N (spiral nodes), Ny = K (strand length),
+// Nz = 1. Patterns that rely on integer x/y/z lattice semantics (Life3D,
+// Tetris3D, Pong3D, Hilbert) are tagged lattice-only and disabled in
+// Fibonacci mode rather than silently looking wrong.
 
-export type CubeSpec = {
+export type LatticeSpec = {
+  kind: 'lattice';
   Nx: number;
   Ny: number;
   Nz: number;
   pitchMeters: number;
 };
 
-export const DEFAULT_CUBE: CubeSpec = {
+export type FibonacciSpec = {
+  kind: 'fibonacci';
+  /** Number of nodes in the disc (Vogel spiral, n=0 at center). */
+  spiralCount: number;
+  /** LEDs per hanging strand (= effective Y dim). */
+  strandLength: number;
+  /** Vogel `c` constant in meters: r = c·√n. Sets the radial pitch. */
+  minSpacing: number;
+  /** Vertical pitch within a strand (meters). */
+  strandSpacing: number;
+};
+
+export type CubeSpec = LatticeSpec | FibonacciSpec;
+
+export const DEFAULT_LATTICE_CUBE: LatticeSpec = {
+  kind: 'lattice',
   Nx: 10,
   Ny: 10,
   Nz: 10,
   pitchMeters: 0.1016, // 4 inches — matches the old 0.9144 m / 9 spacing
 };
 
-export function ledCount(spec: CubeSpec): number {
-  return spec.Nx * spec.Ny * spec.Nz;
+export const DEFAULT_FIBONACCI_CUBE: FibonacciSpec = {
+  kind: 'fibonacci',
+  spiralCount: 60,        // ~ a single dense disc, like the user's reference photo
+  strandLength: 20,       // hanging strand of 20 LEDs per node
+  minSpacing: 0.04,       // 4 cm Vogel constant — disc radius ≈ 0.04·√59 ≈ 0.31 m
+  strandSpacing: 0.05,    // 5 cm vertical pitch within a strand
+};
+
+export const DEFAULT_CUBE: CubeSpec = DEFAULT_LATTICE_CUBE;
+
+/**
+ * Synthetic grid dims exposed to patterns and the engine regardless of
+ * which shape is active. Lattice → (Nx, Ny, Nz). Fibonacci → (N, K, 1).
+ */
+export function gridDims(spec: CubeSpec): { Nx: number; Ny: number; Nz: number } {
+  if (spec.kind === 'fibonacci') {
+    return { Nx: spec.spiralCount, Ny: spec.strandLength, Nz: 1 };
+  }
+  return { Nx: spec.Nx, Ny: spec.Ny, Nz: spec.Nz };
 }
 
-/** Physical LED-to-LED spacing in meters (uniform across axes). */
+export function ledCount(spec: CubeSpec): number {
+  const { Nx, Ny, Nz } = gridDims(spec);
+  return Nx * Ny * Nz;
+}
+
+/**
+ * Representative LED-to-LED spacing. Drives billboard size and overlay
+ * geometry. Lattice = uniform pitch; Fibonacci = the smaller of the disc
+ * Vogel constant and the strand pitch (so billboards never overlap).
+ */
 export function spacing(spec: CubeSpec): number {
+  if (spec.kind === 'fibonacci') {
+    return Math.min(spec.minSpacing, spec.strandSpacing);
+  }
   return spec.pitchMeters;
+}
+
+/** Outer disc radius for Fibonacci mode in meters. */
+export function discRadius(spec: FibonacciSpec): number {
+  return spec.spiralCount > 1 ? spec.minSpacing * Math.sqrt(spec.spiralCount - 1) : 0;
 }
 
 /** Per-axis edge lengths in meters, for the structure overlay box. */
 export function edges(spec: CubeSpec): { x: number; y: number; z: number } {
+  if (spec.kind === 'fibonacci') {
+    const r = discRadius(spec);
+    const h = Math.max(0, spec.strandLength - 1) * spec.strandSpacing;
+    return { x: 2 * r, y: h, z: 2 * r };
+  }
   return {
     x: Math.max(0, spec.Nx - 1) * spec.pitchMeters,
     y: Math.max(0, spec.Ny - 1) * spec.pitchMeters,
@@ -56,18 +108,14 @@ export function edges(spec: CubeSpec): { x: number; y: number; z: number } {
 }
 
 /**
- * Canonical logical index for voxel (x, y, z).
- * Must match the order patterns iterate in and the buffer indexing used
- * by colorPipeline + transports.
+ * Canonical logical index for voxel (x, y, z). In Fibonacci mode this
+ * means (spiral_n, strand_y, 0) → n*K + (K-1-k_top), preserving stream
+ * order via the existing column-major linearisation.
  */
 export function voxelIndex(x: number, y: number, z: number, Ny: number, Nz: number): number {
   return x * Ny * Nz + y * Nz + z;
 }
 
-/**
- * Per-voxel normalized + centered coords, plus world-space positions.
- * Parallel Float32Arrays stay allocation-free in the per-frame hot path.
- */
 export type VoxelCoords = {
   Nx: number;
   Ny: number;
@@ -80,15 +128,17 @@ export type VoxelCoords = {
   us: Float32Array;         // normalized [0,1] per axis
   vs: Float32Array;
   ws: Float32Array;
-  cxs: Float32Array;        // centered [-1,1] per axis
+  cxs: Float32Array;        // centered [-1,1] per axis (world-derived)
   cys: Float32Array;
   czs: Float32Array;
 };
 
-/**
- * Build all per-voxel buffers in logical-index order in one pass.
- */
 export function buildCoords(spec: CubeSpec): VoxelCoords {
+  if (spec.kind === 'fibonacci') return buildCoordsFibonacci(spec);
+  return buildCoordsLattice(spec);
+}
+
+function buildCoordsLattice(spec: LatticeSpec): VoxelCoords {
   const { Nx, Ny, Nz, pitchMeters: p } = spec;
   const count = Nx * Ny * Nz;
   const halfX = ((Nx - 1) / 2) * p;
@@ -113,7 +163,7 @@ export function buildCoords(spec: CubeSpec): VoxelCoords {
       for (let z = 0; z < Nz; z++) {
         positions[i * 3 + 0] = x * p - halfX;
         positions[i * 3 + 1] = y * p - halfY;
-        positions[i * 3 + 2] = halfZ - z * p;
+        positions[i * 3 + 2] = halfZ - z * p;  // z=0 lands on the front face (+Z)
         xs[i] = x;
         ys[i] = y;
         zs[i] = z;
@@ -131,4 +181,82 @@ export function buildCoords(spec: CubeSpec): VoxelCoords {
     }
   }
   return { Nx, Ny, Nz, count, positions, xs, ys, zs, us, vs, ws, cxs, cys, czs };
+}
+
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ≈ 137.508°
+
+/**
+ * Vogel spiral × hanging strand. The LOGICAL layout matches lattice
+ * convention exactly so class-API patterns (which iterate the buffer
+ * via x/y/z loops with y=0 at the bottom) render correctly without
+ * special-casing:
+ *
+ *   logical i = n * K + y    (n = spiral index 0..N-1, center→edge)
+ *                            (y = 0 at strand bottom, K-1 at strand top)
+ *
+ * The strip's physical traversal is top-to-bottom per strand (entering
+ * at the disc), then jumps to the top of the next spiral node. That
+ * top-down stream order is encoded in the ADDRESS MAP, not in the
+ * logical layout — see buildAddressMapForCube in wiring.ts. This is the
+ * same separation the lattice already uses (logical = x-major, stream =
+ * whatever the wiring config dictates).
+ */
+function buildCoordsFibonacci(spec: FibonacciSpec): VoxelCoords {
+  const { spiralCount: N, strandLength: K, minSpacing: c, strandSpacing: ps } = spec;
+  const count = N * K;
+
+  // Disc node 2D positions in the X-Z plane.
+  const discX = new Float32Array(N);
+  const discZ = new Float32Array(N);
+  let maxR = 0;
+  for (let n = 0; n < N; n++) {
+    const r = c * Math.sqrt(n);
+    const theta = n * GOLDEN_ANGLE;
+    discX[n] = r * Math.cos(theta);
+    discZ[n] = r * Math.sin(theta);
+    if (r > maxR) maxR = r;
+  }
+  const halfY = ((K - 1) / 2) * ps;
+  const halfXZ = Math.max(maxR, 1e-6);
+
+  const positions = new Float32Array(count * 3);
+  const xs = new Int16Array(count);
+  const ys = new Int16Array(count);
+  const zs = new Int16Array(count);
+  const us = new Float32Array(count);
+  const vs = new Float32Array(count);
+  const ws = new Float32Array(count);
+  const cxs = new Float32Array(count);
+  const cys = new Float32Array(count);
+  const czs = new Float32Array(count);
+
+  const invN = N > 1 ? 1 / (N - 1) : 0;
+  const invK = K > 1 ? 1 / (K - 1) : 0;
+
+  for (let n = 0; n < N; n++) {
+    const wx = discX[n];
+    const wz = discZ[n];
+    for (let y = 0; y < K; y++) {
+      const i = n * K + y;            // logical index (lattice-convention y)
+      const wy = -halfY + y * ps;     // y=0 at strand bottom, y=K-1 at top (disc)
+
+      positions[i * 3 + 0] = wx;
+      positions[i * 3 + 1] = wy;
+      positions[i * 3 + 2] = wz;
+
+      xs[i] = n;
+      ys[i] = y;
+      zs[i] = 0;
+
+      us[i] = n * invN;
+      vs[i] = y * invK;
+      ws[i] = 0;
+
+      cxs[i] = wx / halfXZ;
+      cys[i] = K > 1 ? wy / halfY : 0;
+      czs[i] = wz / halfXZ;
+    }
+  }
+
+  return { Nx: N, Ny: K, Nz: 1, count, positions, xs, ys, zs, us, vs, ws, cxs, cys, czs };
 }

@@ -12,12 +12,12 @@
 // surfaces the expected size.
 
 import { invoke } from '@tauri-apps/api/core';
-import { ledCount, buildCoords, type CubeSpec } from '../cubeGeometry';
+import { ledCount, buildCoords, gridDims, type CubeSpec } from '../cubeGeometry';
 import type { LoadedPattern, RenderContext, SetupContext } from '../patternApi';
 import { patternUtils } from '../utils';
 import { buildGammaLut, computeDuty, bakeFrame, type ColorConfig } from '../colorPipeline';
 import { estimatePower, type PowerConfig } from '../power';
-import { buildAddressMap, type WiringConfig } from '../wiring';
+import { buildAddressMapForCube, type WiringConfig } from '../wiring';
 import { renderPatternFrame } from '../patternRender';
 
 export type ExportOptions = {
@@ -40,11 +40,11 @@ export async function exportFastLed(args: {
   const { pattern, paramValues, cube, color, power, wiring, options } = args;
   const { seconds, fps, dataPin } = options;
 
-  const { Nx, Ny, Nz } = cube;
+  const { Nx, Ny, Nz } = gridDims(cube);
   const Nmax = Math.max(Nx, Ny, Nz);
   const count = ledCount(cube);
   const coords = buildCoords(cube);
-  const addressMap = buildAddressMap(wiring, Nx, Ny, Nz);
+  const addressMap = buildAddressMapForCube(cube, wiring);
   const gammaLut = buildGammaLut(color.gamma);
 
   const patternBuf = new Uint8ClampedArray(count * 3);
@@ -113,11 +113,11 @@ export async function exportFastLed(args: {
 
 /** How many flash bytes a given export will consume (approximate). */
 export function estimateExportSize(
-  cube: { Nx: number; Ny: number; Nz: number },
+  cube: CubeSpec,
   seconds: number,
   fps: number,
 ): number {
-  return cube.Nx * cube.Ny * cube.Nz * 3 * Math.max(1, Math.round(seconds * fps));
+  return ledCount(cube) * 3 * Math.max(1, Math.round(seconds * fps));
 }
 
 function formatFrameRow(bytes: Uint8Array): string {

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import { useAppStore } from '../../state/store';
-import { edges } from '../../core/cubeGeometry';
+import { edges, gridDims } from '../../core/cubeGeometry';
 
 // Ghost mode: thin wireframe bounding box.
 // Full mode: bounding box + Ny translucent XZ planes (one per mesh layer)
@@ -108,13 +108,20 @@ export function StructureOverlay() {
   if (mode === 'clean') return null;
 
   const e = edges(cube);
+  const { Ny } = gridDims(cube);
+  // Layer planes only model a stack-of-2D-slices physical build, which
+  // is exactly the lattice case. For Fibonacci the geometry is a disc
+  // with hanging strands — the bounding box still gives a sense of
+  // overall extent, but the per-layer XZ planes don't represent
+  // anything physical, so skip them.
+  const showLayerStack = mode === 'full' && cube.kind === 'lattice';
 
   return (
     <>
       <BoundingBox ex={e.x} ey={e.y} ez={e.z} color={GHOST_COLOR} opacity={mode === 'ghost' ? 0.6 : 0.9} />
-      {mode === 'full' && (
+      {showLayerStack && (
         <>
-          <LayerPlanes Ny={cube.Ny} ex={e.x} ey={e.y} ez={e.z} />
+          <LayerPlanes Ny={Ny} ex={e.x} ey={e.y} ez={e.z} />
           <LayerColumns ex={e.x} ey={e.y} ez={e.z} />
         </>
       )}

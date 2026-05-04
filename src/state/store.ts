@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { CubeSpec, DEFAULT_CUBE } from '../core/cubeGeometry';
+import { CubeSpec, DEFAULT_CUBE, type LatticeSpec, type FibonacciSpec } from '../core/cubeGeometry';
 import type { LoadedPattern } from '../core/patternApi';
 import { ColorConfig, defaultColorConfig } from '../core/colorPipeline';
 import { PowerConfig, defaultPowerConfig } from '../core/power';
@@ -46,7 +46,12 @@ export type AppState = {
   // Structure
   cube: CubeSpec;
   setCube: (c: CubeSpec) => void;
-  patchCube: (patch: Partial<CubeSpec>) => void;
+  // Partial<CubeSpec> against a discriminated union is awkward — callers
+  // patch fields that belong to whichever variant is currently active,
+  // so we accept loose patches and trust the structure panel to only
+  // emit fields that match the current `kind`. Mode switches go through
+  // setCube, never patchCube.
+  patchCube: (patch: Partial<LatticeSpec> & Partial<FibonacciSpec>) => void;
 
   // Viewer
   cameraPreset: CameraPreset;
@@ -108,7 +113,8 @@ export type AppState = {
 export const useAppStore = create<AppState>((set) => ({
   cube: DEFAULT_CUBE,
   setCube: (c) => set({ cube: c }),
-  patchCube: (patch) => set((s) => ({ cube: { ...s.cube, ...patch } })),
+  patchCube: (patch) =>
+    set((s) => ({ cube: { ...s.cube, ...patch } as CubeSpec })),
 
   cameraPreset: 'orbit',
   structureMode: 'ghost',

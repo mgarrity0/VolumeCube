@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useAppStore } from '../../state/store';
-import { buildCoords, ledCount, spacing } from '../../core/cubeGeometry';
+import { buildCoords, ledCount, spacing, gridDims } from '../../core/cubeGeometry';
 import type { RenderContext } from '../../core/patternApi';
 import { patternUtils } from '../../core/utils';
 import { buildGammaLut, computeDuty, bakeFrame } from '../../core/colorPipeline';
 import { estimatePower } from '../../core/power';
 import { audioEngine } from '../../core/audio';
-import { buildAddressMap } from '../../core/wiring';
+import { buildAddressMapForCube } from '../../core/wiring';
 import { transportManager } from '../../core/transports';
 import { renderPatternFrame } from '../../core/patternRender';
 import { createLedPointsMaterial } from './ledPointsMaterial';
@@ -50,8 +50,8 @@ export function Cube() {
   const dutyBuf = useMemo(() => new Uint8ClampedArray(count * 3), [count]);
   const streamBuf = useMemo(() => new Uint8Array(count * 3), [count]);
   const addressMap = useMemo(
-    () => buildAddressMap(wiring, cube.Nx, cube.Ny, cube.Nz),
-    [wiring, cube.Nx, cube.Ny, cube.Nz],
+    () => buildAddressMapForCube(cube, wiring),
+    [cube, wiring],
   );
 
   // Shader material + its uniforms live outside React so the per-frame
@@ -125,6 +125,7 @@ export function Cube() {
     if (!activePattern) return;
 
     const spec = store.cube;
+    const dims = gridDims(spec);
     const colorCfg = store.color;
     const powerCfg = store.power;
     const paramValues = store.pattern.paramValues[activePattern.name] ?? {};
@@ -139,7 +140,7 @@ export function Cube() {
       gammaLutRef.current.lut = buildGammaLut(colorCfg.gamma);
     }
 
-    const Nmax = Math.max(spec.Nx, spec.Ny, spec.Nz);
+    const Nmax = Math.max(dims.Nx, dims.Ny, dims.Nz);
 
     // Reset time base + run setup when a new pattern was activated.
     if (clock.current.setupCookie !== loadToken) {
@@ -149,7 +150,7 @@ export function Cube() {
       if (activePattern.setup) {
         try {
           activePattern.setup({
-            Nx: spec.Nx, Ny: spec.Ny, Nz: spec.Nz, N: Nmax,
+            Nx: dims.Nx, Ny: dims.Ny, Nz: dims.Nz, N: Nmax,
             params: paramValues,
           });
         } catch (e) {
@@ -164,9 +165,9 @@ export function Cube() {
       t: now - clock.current.patternStart,
       dt: delta,
       frame: clock.current.frame++,
-      Nx: spec.Nx,
-      Ny: spec.Ny,
-      Nz: spec.Nz,
+      Nx: dims.Nx,
+      Ny: dims.Ny,
+      Nz: dims.Nz,
       N: Nmax,
       params: paramValues,
       audio: {

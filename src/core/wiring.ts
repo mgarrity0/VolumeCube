@@ -187,6 +187,34 @@ function buildAddressMapColumns(cfg: WiringConfig, Nx: number, Ny: number, Nz: n
 }
 
 /**
+ * Geometry-aware wrapper. Lattice cubes use the configured wiring
+ * topology. Fibonacci cubes have a fixed topology — strip enters at the
+ * top of strand n=0 (the disc-center LED), walks down to the bottom,
+ * jumps to the top of strand n=1, and so on. Logical indexing keeps
+ * lattice convention (y=0 at bottom) so class-API patterns Just Work,
+ * so the Fibonacci address map encodes the per-strand Y flip:
+ *   map[logical = n*K + y] = stream = n*K + (K - 1 - y)
+ */
+export function buildAddressMapForCube(
+  cube: import('./cubeGeometry').CubeSpec,
+  cfg: WiringConfig,
+): Uint32Array {
+  if (cube.kind === 'fibonacci') {
+    const N = cube.spiralCount;
+    const K = cube.strandLength;
+    const map = new Uint32Array(N * K);
+    for (let n = 0; n < N; n++) {
+      const base = n * K;
+      for (let y = 0; y < K; y++) {
+        map[base + y] = base + (K - 1 - y);
+      }
+    }
+    return map;
+  }
+  return buildAddressMap(cfg, cube.Nx, cube.Ny, cube.Nz);
+}
+
+/**
  * Build positions in stream order — used by the wiring-path overlay to
  * draw a continuous polyline through the LEDs in the order they're wired.
  * The `positions` argument is the logical-order position buffer produced

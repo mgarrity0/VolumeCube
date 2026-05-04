@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { useAppStore } from '../../state/store';
 import { buildCoords, spacing } from '../../core/cubeGeometry';
-import { buildAddressMap, buildStreamPath } from '../../core/wiring';
+import { buildAddressMapForCube, buildStreamPath } from '../../core/wiring';
 
 // Wiring overlay: polyline through every LED in stream order, ~50
 // arrowhead cones spaced along it pointing in the data-flow direction,
@@ -35,7 +35,7 @@ export function WiringPathOverlay() {
 
   const { positions, colors, arrows, startPos, endPos } = useMemo(() => {
     const logical = buildCoords(cube).positions;
-    const map = buildAddressMap(wiring, cube.Nx, cube.Ny, cube.Nz);
+    const map = buildAddressMapForCube(cube, wiring);
     const streamPositions = buildStreamPath(map, logical);
     const count = streamPositions.length / 3;
 
