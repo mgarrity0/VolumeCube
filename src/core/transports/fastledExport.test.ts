@@ -110,7 +110,8 @@ describe('FastLED export — multi-board', () => {
       options: { seconds: 1, fps: 5, boards, sketchStem: 'Cube' },
     });
     const boardA = wrote[0].contents;
-    // First 5 pins: 16, 3, 1, 17, 19 = Q1..Q5.
+    // First 5 pins from the verified QuinLED Brainboard map: 0,1,2,3,4
+    expect(DIG_OCTA_PINS.slice(0, 5)).toEqual([0, 1, 2, 3, 4]);
     for (let i = 0; i < 5; i++) {
       const pin = DIG_OCTA_PINS[i];
       // ledStart = i*100, ledCount = 100

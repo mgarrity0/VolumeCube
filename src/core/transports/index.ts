@@ -166,12 +166,23 @@ export type ExportBoard = {
   outputs: ExportOutput[];
 };
 
-// QuinLED-Dig-Octa Brainboard 32-8L pin map. Outputs Q1..Q8 → these
-// GPIOs in order. Q2/Q3 reuse the bootloader UART pins which the
-// Brainboard breaks out as data outputs — safe because the bootloader
-// is only active during flashing.
-export const DIG_OCTA_PINS: readonly number[] = [16, 3, 1, 17, 19, 22, 21, 18];
-export const DIG_OCTA_LABELS: readonly string[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8'];
+// QuinLED-Dig-Octa Brainboard-32-8L pin map. Verified against the
+// official pinout published on quinled.info — the silkscreen labels
+// outputs LED1..LED8 and they map to:
+//   LED1 = GPIO 0      LED5 = GPIO 4
+//   LED2 = GPIO 1      LED6 = GPIO 5
+//   LED3 = GPIO 2      LED7 = GPIO 12
+//   LED4 = GPIO 3      LED8 = GPIO 13
+//
+// Several of these (GPIO 0/2/12) are ESP32 boot-mode strap pins and
+// GPIO 1/3 are the UART used during flashing — the Brainboard's level
+// shifters buffer those so the LED outputs are clean post-boot. Don't
+// "fix" this map to safer-looking GPIOs without checking what's
+// actually broken out to the screw terminals.
+export const DIG_OCTA_PINS: readonly number[] = [0, 1, 2, 3, 4, 5, 12, 13];
+export const DIG_OCTA_LABELS: readonly string[] = [
+  'LED1', 'LED2', 'LED3', 'LED4', 'LED5', 'LED6', 'LED7', 'LED8',
+];
 
 export type ExportMode = 'single-pin' | 'multi-board';
 
