@@ -3,12 +3,17 @@ import { useAppStore } from '../../state/store';
 import {
   transportManager,
   defaultPortForKind,
+  autoLayoutDigOcta,
+  DIG_OCTA_PINS,
+  DIG_OCTA_LABELS,
+  type ExportBoard,
+  type ExportOutput,
   type NetworkTarget,
   type OutputStats,
   type TransportKind,
 } from '../../core/transports';
 import { listSerialPorts } from '../../core/transports/serial';
-import { exportFastLed, estimateExportSize } from '../../core/transports/fastledExport';
+import { exportFastLed, estimateExportSize, estimateBoardSize } from '../../core/transports/fastledExport';
 import { ledCount } from '../../core/cubeGeometry';
 
 // OutputPanel — choose and connect a transport, export FastLED sketches.
@@ -127,6 +132,7 @@ export function OutputPanel() {
     setBusy(true);
     setExportStatus('Baking…');
     try {
+      const multi = output.exportMode === 'multi-board' && output.exportBoards.length > 0;
       const res = await exportFastLed({
         pattern,
         paramValues: paramValues ?? {},
@@ -137,16 +143,64 @@ export function OutputPanel() {
         options: {
           seconds: output.exportSeconds,
           fps: output.exportFps,
-          dataPin: output.exportPin,
           sketchStem: pattern.displayName,
+          ...(multi
+            ? { boards: output.exportBoards }
+            : { dataPin: output.exportPin }),
         },
       });
-      setExportStatus(`Wrote ${res.frames} frames (${res.sizeKb} KB) → ${res.path}`);
+      if (res.paths.length === 1) {
+        setExportStatus(`Wrote ${res.frames} frames (${res.sizeKb} KB) → ${res.paths[0]}`);
+      } else {
+        setExportStatus(
+          `Wrote ${res.paths.length} sketches × ${res.frames} frames (${res.sizeKb} KB total)\n${res.paths.join('\n')}`,
+        );
+      }
     } catch (e: any) {
       setExportStatus('Error: ' + (e?.message ?? String(e)));
     } finally {
       setBusy(false);
     }
+  };
+
+  // -------- Multi-board (FastLED export) helpers --------
+
+  const switchExportMode = (mode: 'single-pin' | 'multi-board') => {
+    if (mode === output.exportMode) return;
+    if (mode === 'multi-board' && output.exportBoards.length === 0) {
+      // Seed with the user's standard build: 2 Dig-Octa boards, 5 outputs
+      // each. They can tweak per-output afterwards.
+      const totalLeds = ledCount(cube);
+      patchOutput({
+        exportMode: 'multi-board',
+        exportBoards: autoLayoutDigOcta(totalLeds, 2, 5),
+      });
+    } else {
+      patchOutput({ exportMode: mode });
+    }
+  };
+
+  const refitBoards = (boards: number, outputsPerBoard: number) => {
+    const totalLeds = ledCount(cube);
+    patchOutput({
+      exportBoards: autoLayoutDigOcta(totalLeds, boards, outputsPerBoard),
+    });
+  };
+
+  const patchBoard = (boardId: string, patch: Partial<ExportBoard>) => {
+    patchOutput({
+      exportBoards: output.exportBoards.map((b) => (b.id === boardId ? { ...b, ...patch } : b)),
+    });
+  };
+
+  const patchBoardOutput = (boardId: string, idx: number, patch: Partial<ExportOutput>) => {
+    patchOutput({
+      exportBoards: output.exportBoards.map((b) => {
+        if (b.id !== boardId) return b;
+        const outputs = b.outputs.map((o, i) => (i === idx ? { ...o, ...patch } : o));
+        return { ...b, outputs };
+      }),
+    });
   };
 
   // -------- Targets table helpers --------
@@ -330,33 +384,64 @@ export function OutputPanel() {
             />
           </div>
           <div className="field">
-            <span>Data pin</span>
-            <input
-              type="number"
-              min={0}
-              max={48}
-              step={1}
-              value={output.exportPin}
-              onChange={(e) => patchOutput({ exportPin: Math.max(0, Number(e.target.value) || 16) })}
+            <span>Mode</span>
+            <select
+              value={output.exportMode}
+              onChange={(e) => switchExportMode(e.target.value as 'single-pin' | 'multi-board')}
+              title="Single pin: one sketch driving one GPIO. Multi-board: one sketch per board, each with multiple FastLED outputs (Dig-Octa friendly)."
+            >
+              <option value="single-pin">Single pin (one sketch)</option>
+              <option value="multi-board">Multi-board (Dig-Octa)</option>
+            </select>
+          </div>
+
+          {output.exportMode === 'single-pin' && (
+            <>
+              <div className="field">
+                <span>Data pin</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={48}
+                  step={1}
+                  value={output.exportPin}
+                  onChange={(e) => patchOutput({ exportPin: Math.max(0, Number(e.target.value) || 16) })}
+                />
+              </div>
+              <div className="stat-line">
+                Est. size:{' '}
+                <strong>
+                  {(estimateExportSize(cube, output.exportSeconds, output.exportFps) / 1024).toFixed(0)} KB
+                </strong>
+              </div>
+            </>
+          )}
+
+          {output.exportMode === 'multi-board' && (
+            <MultiBoardEditor
+              boards={output.exportBoards}
+              totalLeds={ledCount(cube)}
+              seconds={output.exportSeconds}
+              fps={output.exportFps}
+              onPatchBoard={patchBoard}
+              onPatchOutput={patchBoardOutput}
+              onRefit={refitBoards}
             />
-          </div>
-          <div className="stat-line">
-            Est. size:{' '}
-            <strong>
-              {(estimateExportSize(cube, output.exportSeconds, output.exportFps) / 1024).toFixed(0)} KB
-            </strong>
-          </div>
+          )}
+
           <button
             onClick={onExport}
             disabled={busy || !pattern}
             style={{ marginTop: 8, width: '100%' }}
           >
-            {busy ? 'Baking…' : 'Bake .ino'}
+            {busy ? 'Baking…' : output.exportMode === 'multi-board' && output.exportBoards.length > 0
+              ? `Bake ${output.exportBoards.length} .ino files`
+              : 'Bake .ino'}
           </button>
           {exportStatus && (
             <div
               className="stat-line"
-              style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11 }}
+              style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11, whiteSpace: 'pre-wrap' }}
             >
               {exportStatus}
             </div>
@@ -459,6 +544,159 @@ function TargetsTable({
         </div>
       )}
     </div>
+  );
+}
+
+// -------- Multi-board (FastLED export) editor --------
+
+function MultiBoardEditor({
+  boards,
+  totalLeds,
+  seconds,
+  fps,
+  onPatchBoard,
+  onPatchOutput,
+  onRefit,
+}: {
+  boards: ExportBoard[];
+  totalLeds: number;
+  seconds: number;
+  fps: number;
+  onPatchBoard: (boardId: string, patch: Partial<ExportBoard>) => void;
+  onPatchOutput: (boardId: string, idx: number, patch: Partial<ExportOutput>) => void;
+  onRefit: (boards: number, outputsPerBoard: number) => void;
+}) {
+  const [refitBoards, setRefitBoards] = useState(boards.length || 2);
+  const [refitOutputs, setRefitOutputs] = useState(boards[0]?.outputs.length || 5);
+
+  const totalCovered = boards.reduce((a, b) => a + b.ledCount, 0);
+  const coverageWarning = totalCovered !== totalLeds
+    ? `Boards cover ${totalCovered} of ${totalLeds} LEDs`
+    : null;
+
+  return (
+    <div style={{ marginTop: 6, fontSize: 11 }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+        <strong style={{ flex: 1 }}>Layout</strong>
+        <span style={{ opacity: 0.7 }}>Boards</span>
+        <input
+          type="number"
+          min={1}
+          max={8}
+          style={{ width: 40 }}
+          value={refitBoards}
+          onChange={(e) => setRefitBoards(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+        />
+        <span style={{ opacity: 0.7 }}>× Outputs</span>
+        <input
+          type="number"
+          min={1}
+          max={8}
+          style={{ width: 40 }}
+          value={refitOutputs}
+          onChange={(e) => setRefitOutputs(Math.max(1, Math.min(8, Number(e.target.value) || 1)))}
+        />
+        <button onClick={() => onRefit(refitBoards, refitOutputs)} title="Auto-fit cube LED count across this many boards × outputs, using Dig-Octa pin map.">
+          Auto-fit
+        </button>
+      </div>
+
+      {boards.map((b) => (
+        <BoardCard
+          key={b.id}
+          board={b}
+          seconds={seconds}
+          fps={fps}
+          onPatchBoard={onPatchBoard}
+          onPatchOutput={onPatchOutput}
+        />
+      ))}
+
+      {coverageWarning && (
+        <div style={{ marginTop: 6, color: '#ff9060', fontSize: 11 }}>
+          ⚠ {coverageWarning}
+        </div>
+      )}
+      <div style={{ marginTop: 4, opacity: 0.7, fontSize: 10 }}>
+        Dig-Octa pin map (Q1..Q8): {DIG_OCTA_PINS.map((p, i) => `${DIG_OCTA_LABELS[i]}=${p}`).join(', ')}
+      </div>
+    </div>
+  );
+}
+
+function BoardCard({
+  board,
+  seconds,
+  fps,
+  onPatchBoard,
+  onPatchOutput,
+}: {
+  board: ExportBoard;
+  seconds: number;
+  fps: number;
+  onPatchBoard: (boardId: string, patch: Partial<ExportBoard>) => void;
+  onPatchOutput: (boardId: string, idx: number, patch: Partial<ExportOutput>) => void;
+}) {
+  const sizeKb = estimateBoardSize(board, seconds, fps) / 1024;
+  return (
+    <div style={{ border: '1px solid #2a3a70', borderRadius: 4, padding: 6, marginBottom: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <input
+          type="text"
+          value={board.name}
+          onChange={(e) => onPatchBoard(board.id, { name: e.target.value })}
+          style={{ fontWeight: 600, flex: 1 }}
+        />
+        <span style={{ opacity: 0.7 }}>
+          LEDs {board.ledStart}..{board.ledStart + board.ledCount - 1} · {sizeKb.toFixed(0)} KB
+        </span>
+      </div>
+      <div style={{ display: 'grid', gap: 2, gridTemplateColumns: '0.7fr 0.7fr 0.9fr 0.9fr' }}>
+        <span style={{ opacity: 0.6 }}>Label</span>
+        <span style={{ opacity: 0.6 }}>Pin</span>
+        <span style={{ opacity: 0.6 }}>Start</span>
+        <span style={{ opacity: 0.6 }}>Count</span>
+        {board.outputs.map((o, i) => (
+          <OutputRow
+            key={i}
+            o={o}
+            onPatch={(patch) => onPatchOutput(board.id, i, patch)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OutputRow({ o, onPatch }: { o: ExportOutput; onPatch: (patch: Partial<ExportOutput>) => void }) {
+  return (
+    <>
+      <input
+        type="text"
+        value={o.label ?? ''}
+        placeholder="Q1"
+        onChange={(e) => onPatch({ label: e.target.value })}
+      />
+      <input
+        type="number"
+        min={0}
+        max={48}
+        value={o.pin}
+        onChange={(e) => onPatch({ pin: Math.max(0, Number(e.target.value) || 0) })}
+      />
+      <input
+        type="number"
+        min={0}
+        value={o.ledStart}
+        onChange={(e) => onPatch({ ledStart: Math.max(0, Number(e.target.value) || 0) })}
+      />
+      <input
+        type="number"
+        min={0}
+        value={o.ledCount}
+        onChange={(e) => onPatch({ ledCount: Math.max(0, Number(e.target.value) || 0) })}
+      />
+    </>
   );
 }
 

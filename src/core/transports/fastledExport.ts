@@ -2,14 +2,28 @@
 // chosen frame rate and bakes every frame into a PROGMEM byte array.
 // The generated sketch plays the recorded animation in a loop.
 //
-// This is the simplest credible MVP for "run the cube untethered": the
-// sketch is just a tape-recorder, so any pattern — including class-API
-// particle systems — exports as if it were prerendered video.
+// Two output modes:
 //
-// Memory: 10×10×10 LEDs × 3 bytes × 150 frames (5 s @ 30 fps) = 450 KB.
-// ESP32 has 4 MB flash by default so this fits. Users tweaking seconds
-// or FPS above 10-20× that will start to hit flash limits; the panel
-// surfaces the expected size.
+//   single-pin   — One sketch driving one GPIO output. Original behavior;
+//                  fine for small builds where a single chain is OK.
+//
+//   multi-board  — One sketch PER BOARD, each with multiple FastLED
+//                  outputs (e.g. five Q1..Q5 outputs on a QuinLED
+//                  Dig-Octa Brainboard driving five panels in parallel).
+//                  Total bake size per board = ledCount × 3 × frames,
+//                  so two Dig-Octas with 500 LEDs each × 150 frames =
+//                  ~225 KB each, well within the 4 MB flash.
+//
+// Color order: bakeFrame() already shuffles bytes to the user-selected
+// physical order (e.g. GRB for WS2815), so the bytes in PROGMEM are
+// chip-correct as-is. FastLED.addLeds<...,RGB> reads them straight
+// through with no second shuffle. (The old single-pin sketch passed
+// the user's colorOrder to FastLED *as well*, which double-shuffled
+// for any non-RGB choice — fixed in this revision.)
+//
+// Arduino IDE expects each .ino to live in a folder of the same name.
+// We write into `exports/{stem}_{ts}/{stem}_{ts}.ino` so the user can
+// open the folder directly without hand-wrapping it.
 
 import { invoke } from '@tauri-apps/api/core';
 import { ledCount, buildCoords, gridDims, type CubeSpec } from '../cubeGeometry';
@@ -19,13 +33,26 @@ import { buildGammaLut, computeDuty, bakeFrame, type ColorConfig } from '../colo
 import { estimatePower, type PowerConfig } from '../power';
 import { buildAddressMapForCube, type WiringConfig } from '../wiring';
 import { renderPatternFrame } from '../patternRender';
+import type { ExportBoard } from './index';
 
 export type ExportOptions = {
   seconds: number;
   fps: number;
-  dataPin: number;
-  /** Sketch name stem — the file ends up at exports/{stem}_{timestamp}.ino */
+  /** Sketch name stem — file ends up under exports/{stem}_{ts}/. */
   sketchStem?: string;
+  // ONE of the next two must be set:
+  /** Legacy single-pin mode. Ignored when `boards` is non-empty. */
+  dataPin?: number;
+  /** Multi-board mode. When set, emits one sketch per board. */
+  boards?: ExportBoard[];
+};
+
+export type ExportResult = {
+  /** All .ino paths written (one per board in multi-board mode, one total in single-pin). */
+  paths: string[];
+  frames: number;
+  /** Total flash bytes baked across all sketches. */
+  sizeKb: number;
 };
 
 export async function exportFastLed(args: {
@@ -36,9 +63,9 @@ export async function exportFastLed(args: {
   power: PowerConfig;
   wiring: WiringConfig;
   options: ExportOptions;
-}): Promise<{ path: string; frames: number; sizeKb: number }> {
+}): Promise<ExportResult> {
   const { pattern, paramValues, cube, color, power, wiring, options } = args;
-  const { seconds, fps, dataPin } = options;
+  const { seconds, fps } = options;
 
   const { Nx, Ny, Nz } = gridDims(cube);
   const Nmax = Math.max(Nx, Ny, Nz);
@@ -57,8 +84,10 @@ export async function exportFastLed(args: {
   const setupCtx: SetupContext = { Nx, Ny, Nz, N: Nmax, params: paramValues };
   if (pattern.setup) pattern.setup(setupCtx);
 
-  const rows: string[] = [];
-
+  // Per-frame all-LEDs stream rendered once, then sliced per board.
+  // Each entry of `frames` is the full stream-ordered byte buffer for
+  // that frame; multi-board mode picks the relevant ranges below.
+  const frames: Uint8Array[] = [];
   for (let f = 0; f < totalFrames; f++) {
     const ctx: RenderContext = {
       t: f * dt,
@@ -69,22 +98,50 @@ export async function exportFastLed(args: {
       Nz,
       N: Nmax,
       params: paramValues,
-      // Offline export has no live mic; beat-reactive patterns will look
-      // dormant in the baked loop.
       audio: { energy: 0, low: 0, mid: 0, high: 0, beat: false },
       power: { amps: 0, watts: 0, budgetAmps: power.budgetAmps, scale: 1 },
       utils: patternUtils,
     };
-
     renderPatternFrame(pattern, ctx, coords, patternBuf);
-
     computeDuty(patternBuf, color.brightness, dutyBuf);
     const pre = estimatePower(dutyBuf, power);
     bakeFrame(patternBuf, color, gammaLut, pre.scale, addressMap, null, streamBuf);
-    rows.push(formatFrameRow(streamBuf));
+    frames.push(streamBuf.slice());
   }
 
-  const sketch = buildSketch({
+  const ts = timestamp();
+  const stem = sanitize(options.sketchStem ?? pattern.displayName);
+
+  // Multi-board path.
+  if (options.boards && options.boards.length > 0) {
+    const paths: string[] = [];
+    let totalBytes = 0;
+    for (const board of options.boards) {
+      const sketch = buildMultiOutputSketch({
+        board,
+        frames,
+        totalFrames,
+        fps,
+        paramValues,
+        patternName: pattern.displayName,
+        cubeDims: { Nx, Ny, Nz },
+      });
+      const dir = `${stem}_Board${board.id}_${ts}`;
+      const relPath = `${dir}/${dir}.ino`;
+      const wrote = await invoke<string>('write_export', { relPath, contents: sketch });
+      paths.push(wrote);
+      totalBytes += sketch.length;
+    }
+    return {
+      paths,
+      frames: totalFrames,
+      sizeKb: Math.round((totalBytes / 1024) * 10) / 10,
+    };
+  }
+
+  // Single-pin legacy path.
+  const dataPin = options.dataPin ?? 16;
+  const sketch = buildSinglePinSketch({
     Nx, Ny, Nz,
     count,
     dataPin,
@@ -92,32 +149,34 @@ export async function exportFastLed(args: {
     totalFrames,
     paramValues,
     patternName: pattern.displayName,
-    colorOrder: color.colorOrder,
-    frames: rows,
+    frames,
   });
-
-  const stem = sanitize(options.sketchStem ?? pattern.displayName);
-  const ts = timestamp();
-  const relPath = `${stem}_${ts}.ino`;
-  const path = await invoke<string>('write_export', {
-    relPath,
-    contents: sketch,
-  });
-
+  const dir = `${stem}_${ts}`;
+  const relPath = `${dir}/${dir}.ino`;
+  const wrote = await invoke<string>('write_export', { relPath, contents: sketch });
   return {
-    path,
+    paths: [wrote],
     frames: totalFrames,
     sizeKb: Math.round((sketch.length / 1024) * 10) / 10,
   };
 }
 
-/** How many flash bytes a given export will consume (approximate). */
+/** How many flash bytes a given export will consume (approximate, per-board). */
 export function estimateExportSize(
   cube: CubeSpec,
   seconds: number,
   fps: number,
 ): number {
   return ledCount(cube) * 3 * Math.max(1, Math.round(seconds * fps));
+}
+
+/** Per-board estimate when an exportBoards layout is configured. */
+export function estimateBoardSize(
+  board: ExportBoard,
+  seconds: number,
+  fps: number,
+): number {
+  return board.ledCount * 3 * Math.max(1, Math.round(seconds * fps));
 }
 
 function formatFrameRow(bytes: Uint8Array): string {
@@ -129,7 +188,7 @@ function formatFrameRow(bytes: Uint8Array): string {
   return s;
 }
 
-function buildSketch(args: {
+function buildSinglePinSketch(args: {
   Nx: number;
   Ny: number;
   Nz: number;
@@ -139,23 +198,19 @@ function buildSketch(args: {
   totalFrames: number;
   paramValues: Record<string, any>;
   patternName: string;
-  colorOrder: string;
-  frames: string[];
+  frames: Uint8Array[];
 }): string {
   const {
     Nx, Ny, Nz, count, dataPin, fps, totalFrames,
-    paramValues, patternName, colorOrder,
-    frames,
+    paramValues, patternName, frames,
   } = args;
 
   const frameBytes = count * 3;
-
   const paramsComment = Object.keys(paramValues)
     .map((k) => `//   ${k} = ${JSON.stringify(paramValues[k])}`)
     .join('\n');
-
   const framesSource = frames
-    .map((row) => `  {${row}}`)
+    .map((f) => `  {${formatFrameRow(f)}}`)
     .join(',\n');
 
   return `// Generated by VolumeCube — pattern: ${patternName}
@@ -179,13 +234,97 @@ ${paramsComment}
 CRGB leds[LED_COUNT];
 
 // Flash-resident frame data. Each row is one frame in stream order,
-// ready to memcpy straight into the CRGB buffer.
+// already shuffled to the configured chip color order, so FastLED's
+// addLeds<...,RGB> reads it through unmodified.
 const uint8_t PROGMEM frames[FRAME_COUNT][FRAME_BYTES] = {
 ${framesSource}
 };
 
 void setup() {
-  FastLED.addLeds<WS2815, DATA_PIN, ${colorOrder}>(leds, LED_COUNT);
+  FastLED.addLeds<WS2815, DATA_PIN, RGB>(leds, LED_COUNT);
+  FastLED.setBrightness(255);
+  FastLED.clear();
+  FastLED.show();
+}
+
+void loop() {
+  static uint16_t f = 0;
+  memcpy_P((uint8_t*)leds, frames[f], FRAME_BYTES);
+  FastLED.show();
+  f = (f + 1) % FRAME_COUNT;
+  delay(1000 / FPS);
+}
+`;
+}
+
+function buildMultiOutputSketch(args: {
+  board: ExportBoard;
+  frames: Uint8Array[];
+  totalFrames: number;
+  fps: number;
+  paramValues: Record<string, any>;
+  patternName: string;
+  cubeDims: { Nx: number; Ny: number; Nz: number };
+}): string {
+  const { board, frames, totalFrames, fps, paramValues, patternName, cubeDims } = args;
+  const frameBytes = board.ledCount * 3;
+
+  // Slice each frame down to this board's byte range. Stream-global
+  // bytes [board.ledStart*3 ... (board.ledStart+board.ledCount)*3)
+  // become the board-local PROGMEM data.
+  const sliceStart = board.ledStart * 3;
+  const sliceEnd = sliceStart + frameBytes;
+  const localFrames = frames.map((f) => f.subarray(sliceStart, sliceEnd));
+
+  const paramsComment = Object.keys(paramValues)
+    .map((k) => `//   ${k} = ${JSON.stringify(paramValues[k])}`)
+    .join('\n');
+
+  const framesSource = localFrames
+    .map((f) => `  {${formatFrameRow(f)}}`)
+    .join(',\n');
+
+  const outputDecls = board.outputs
+    .map((o) => {
+      const label = o.label ? `  // ${o.label}: ${o.ledCount} LEDs` : '';
+      return `  FastLED.addLeds<WS2815, ${o.pin}, RGB>(leds, ${o.ledStart}, ${o.ledCount});${label}`;
+    })
+    .join('\n');
+
+  const outputsComment = board.outputs
+    .map((o) => `//   ${o.label ?? 'out'} GPIO${o.pin}: LEDs ${o.ledStart}..${o.ledStart + o.ledCount - 1}`)
+    .join('\n');
+
+  return `// Generated by VolumeCube — pattern: ${patternName}
+// ${new Date().toISOString()}
+// Baked ${totalFrames} frames at ${fps} fps (${(totalFrames / fps).toFixed(2)} s loop).
+// Grid: ${cubeDims.Nx} x ${cubeDims.Ny} x ${cubeDims.Nz}
+//
+// Board: ${board.name} (id="${board.id}")
+//   LEDs ${board.ledStart}..${board.ledStart + board.ledCount - 1} of the global stream
+//   ${board.outputs.length} output channels:
+${outputsComment}
+//
+// Params:
+${paramsComment}
+
+#include <FastLED.h>
+
+#define LED_COUNT   ${board.ledCount}
+#define FPS         ${fps}
+#define FRAME_COUNT ${totalFrames}
+#define FRAME_BYTES ${frameBytes}
+
+CRGB leds[LED_COUNT];
+
+// Frame data is pre-shuffled to chip color order by the exporter, so
+// FastLED's addLeds<...,RGB> writes the bytes straight through.
+const uint8_t PROGMEM frames[FRAME_COUNT][FRAME_BYTES] = {
+${framesSource}
+};
+
+void setup() {
+${outputDecls}
   FastLED.setBrightness(255);
   FastLED.clear();
   FastLED.show();

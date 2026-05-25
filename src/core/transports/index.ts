@@ -56,7 +56,13 @@ export type OutputConfig = {
   serialBaud: number;
   exportSeconds: number;
   exportFps: number;
+  // Legacy single-pin field (kept for backwards compat with saved configs).
   exportPin: number;
+  // 'single-pin' = old one-sketch-one-output behavior.
+  // 'multi-board' = bake one sketch per board, each with multiple
+  //                 FastLED outputs driving the configured pin map.
+  exportMode: ExportMode;
+  exportBoards: ExportBoard[];
   sendIntervalMs: number;
 };
 
@@ -73,14 +79,101 @@ export const defaultOutputConfig: OutputConfig = {
   // Default to GPIO 16 — the QuinLED Dig-Quad's Q1 output. Other common
   // ESP32 LED pins: 2 (most dev boards), 18, 19. Override per project.
   exportPin: 16,
+  exportMode: 'single-pin',
+  exportBoards: [],
   sendIntervalMs: 20, // 50 fps cap
 };
+
+/**
+ * Auto-populate an exportBoards layout for a given LED count, board
+ * count, and outputs-per-board. Assumes the Dig-Octa pin map and an
+ * even split — caller can tweak per-output afterwards.
+ */
+export function autoLayoutDigOcta(
+  totalLeds: number,
+  boards: number,
+  outputsPerBoard: number,
+  pinMap: readonly number[] = DIG_OCTA_PINS,
+  labels: readonly string[] = DIG_OCTA_LABELS,
+): ExportBoard[] {
+  const totalOutputs = boards * outputsPerBoard;
+  if (totalOutputs === 0) return [];
+  const ledsPerOutput = Math.floor(totalLeds / totalOutputs);
+  const remainder = totalLeds - ledsPerOutput * totalOutputs;
+  const out: ExportBoard[] = [];
+  let cursor = 0;
+  let outIdx = 0;
+  for (let b = 0; b < boards; b++) {
+    const id = String.fromCharCode(65 + b); // "A", "B", "C", …
+    const outputs: ExportOutput[] = [];
+    const boardStart = cursor;
+    for (let o = 0; o < outputsPerBoard; o++) {
+      const extra = outIdx < remainder ? 1 : 0;
+      const count = ledsPerOutput + extra;
+      outputs.push({
+        pin: pinMap[o] ?? pinMap[pinMap.length - 1],
+        ledStart: cursor - boardStart,
+        ledCount: count,
+        label: labels[o] ?? `O${o + 1}`,
+      });
+      cursor += count;
+      outIdx++;
+    }
+    out.push({
+      id,
+      name: `Board ${id}`,
+      ledStart: boardStart,
+      ledCount: cursor - boardStart,
+      outputs,
+    });
+  }
+  return out;
+}
 
 /** Default port per protocol. Used by the UI when adding a new target row. */
 export function defaultPortForKind(kind: TransportKind): number {
   if (kind === 'sacn') return 5568;
   return 4048; // DDP default
 }
+
+// -------- Multi-board FastLED export --------
+//
+// For builds that need more outputs than a single ESP32 GPIO (e.g.
+// QuinLED Dig-Octa Brainboard with 8 outputs, two boards networked
+// together for a 10-panel cube), the exporter bakes ONE sketch per
+// board, each with multiple FastLED.addLeds<>() calls — one per output
+// pin pointing at the right slice of that board's local CRGB buffer.
+
+export type ExportOutput = {
+  /** GPIO number for this output channel. */
+  pin: number;
+  /** First LED in this output's chain (stream-order, board-relative). */
+  ledStart: number;
+  /** Number of LEDs on this output. */
+  ledCount: number;
+  /** Optional label shown in the UI / sketch comments (e.g. "Q1"). */
+  label?: string;
+};
+
+export type ExportBoard = {
+  id: string;          // stable UI key, also used in the output filename
+  /** Human-readable label, e.g. "Board A". */
+  name: string;
+  /** First LED owned by this board in the stream-order buffer. */
+  ledStart: number;
+  /** Number of LEDs owned by this board. */
+  ledCount: number;
+  outputs: ExportOutput[];
+};
+
+// QuinLED-Dig-Octa Brainboard 32-8L pin map. Outputs Q1..Q8 → these
+// GPIOs in order. Q2/Q3 reuse the bootloader UART pins which the
+// Brainboard breaks out as data outputs — safe because the bootloader
+// is only active during flashing.
+export const DIG_OCTA_PINS: readonly number[] = [16, 3, 1, 17, 19, 22, 21, 18];
+export const DIG_OCTA_LABELS: readonly string[] = ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8'];
+
+export type ExportMode = 'single-pin' | 'multi-board';
 
 export type OutputStats = {
   fps: number;
