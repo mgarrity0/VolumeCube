@@ -293,6 +293,23 @@ fn write_export(rel_path: String, contents: String, app: AppHandle) -> Result<St
     Ok(path.to_string_lossy().to_string())
 }
 
+// Binary-payload variant of write_export — used for SD-card pattern
+// data (.bin files of pre-baked frames). Same sandbox rules.
+#[tauri::command]
+fn write_export_bytes(rel_path: String, bytes: Vec<u8>, app: AppHandle) -> Result<String, String> {
+    if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
+        return Err("invalid export path".into());
+    }
+    let exports = resolved_exports_dir(&app)?;
+    std::fs::create_dir_all(&exports).map_err(|e| e.to_string())?;
+    let path = exports.join(&rel_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// Write a snapshot PNG the JS side captured from the WebGL canvas.
 /// `abs_path` comes from a Tauri file-picker dialog so the user has already
 /// authorized the location — we just ensure the parent dir exists and
@@ -331,6 +348,7 @@ pub fn run() {
             serial_send,
             serial_close,
             write_export,
+            write_export_bytes,
             snapshot_write,
         ])
         .setup(|app| {

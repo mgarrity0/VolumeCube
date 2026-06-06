@@ -14,6 +14,7 @@ import {
 } from '../../core/transports';
 import { listSerialPorts } from '../../core/transports/serial';
 import { exportFastLed, estimateExportSize, estimateBoardSize } from '../../core/transports/fastledExport';
+import { bakeForSdCard, estimateBinSize } from '../../core/transports/sdCardExport';
 import { ledCount } from '../../core/cubeGeometry';
 
 // OutputPanel — choose and connect a transport, export FastLED sketches.
@@ -64,6 +65,11 @@ export function OutputPanel() {
   const [ports, setPorts] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  // SD-card mode: which patterns to include in the bake. Defaults to
+  // every pattern in the library when the user switches to this mode.
+  const availablePatterns = useAppStore((s) => s.pattern.available);
+  const allParamValues = useAppStore((s) => s.pattern.paramValues);
+  const [sdPickedPatterns, setSdPickedPatterns] = useState<Set<string>>(new Set());
 
   const totalLeds = useMemo(() => ledCount(cube), [cube]);
   const isNetwork = output.kind === 'wled' || output.kind === 'sacn';
@@ -125,6 +131,9 @@ export function OutputPanel() {
   };
 
   const onExport = async () => {
+    if (output.exportMode === 'sd-card') {
+      return onExportSdCard();
+    }
     if (!pattern) {
       setExportStatus('Load a pattern first.');
       return;
@@ -163,20 +172,65 @@ export function OutputPanel() {
     }
   };
 
+  const onExportSdCard = async () => {
+    const picks = Array.from(sdPickedPatterns);
+    if (picks.length === 0) {
+      setExportStatus('Pick at least one pattern to bake.');
+      return;
+    }
+    if (output.exportBoards.length === 0) {
+      setExportStatus('Configure a board layout first (auto-fit in the table above).');
+      return;
+    }
+    setBusy(true);
+    setExportStatus('Baking SD-card layout…');
+    try {
+      const res = await bakeForSdCard(
+        {
+          patternNames: picks,
+          cube,
+          wiring,
+          color,
+          power,
+          boards: output.exportBoards,
+          paramValues: allParamValues,
+          seconds: output.exportSeconds,
+          fps: output.exportFps,
+        },
+        (msg) => setExportStatus(`Baking SD-card layout… ${msg}`),
+      );
+      const lines: string[] = [
+        `Wrote ${res.patternsBaked} patterns × ${output.exportBoards.length} boards (${res.totalSizeKb} KB total)`,
+        `Folder: exports/${res.baseDir}/`,
+        ...(res.errors.length ? [`Errors:`, ...res.errors.map((e) => `  ${e}`)] : []),
+      ];
+      setExportStatus(lines.join('\n'));
+    } catch (e: any) {
+      setExportStatus('Error: ' + (e?.message ?? String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // -------- Multi-board (FastLED export) helpers --------
 
-  const switchExportMode = (mode: 'single-pin' | 'multi-board') => {
+  const switchExportMode = (mode: 'single-pin' | 'multi-board' | 'sd-card') => {
     if (mode === output.exportMode) return;
-    if (mode === 'multi-board' && output.exportBoards.length === 0) {
+    if ((mode === 'multi-board' || mode === 'sd-card') && output.exportBoards.length === 0) {
       // Seed with the user's standard build: 2 Dig-Octa boards, 5 outputs
       // each. They can tweak per-output afterwards.
       const totalLeds = ledCount(cube);
       patchOutput({
-        exportMode: 'multi-board',
+        exportMode: mode,
         exportBoards: autoLayoutDigOcta(totalLeds, 2, 5),
       });
     } else {
       patchOutput({ exportMode: mode });
+    }
+    // First time entering sd-card mode: pre-select all available patterns
+    // so the user can bake the whole library by default.
+    if (mode === 'sd-card' && sdPickedPatterns.size === 0) {
+      setSdPickedPatterns(new Set(availablePatterns));
     }
   };
 
@@ -387,11 +441,12 @@ export function OutputPanel() {
             <span>Mode</span>
             <select
               value={output.exportMode}
-              onChange={(e) => switchExportMode(e.target.value as 'single-pin' | 'multi-board')}
-              title="Single pin: one sketch driving one GPIO. Multi-board: one sketch per board, each with multiple FastLED outputs (Dig-Octa friendly)."
+              onChange={(e) => switchExportMode(e.target.value as 'single-pin' | 'multi-board' | 'sd-card')}
+              title="Single pin: one sketch driving one GPIO. Multi-board: one sketch per board with multiple outputs. SD card: bake N patterns × M boards as .bin files for the player firmware to load from microSD."
             >
               <option value="single-pin">Single pin (one sketch)</option>
               <option value="multi-board">Multi-board (Dig-Octa)</option>
+              <option value="sd-card">SD card (multi-board, multi-pattern)</option>
             </select>
           </div>
 
@@ -417,7 +472,7 @@ export function OutputPanel() {
             </>
           )}
 
-          {output.exportMode === 'multi-board' && (
+          {(output.exportMode === 'multi-board' || output.exportMode === 'sd-card') && (
             <MultiBoardEditor
               boards={output.exportBoards}
               totalLeds={ledCount(cube)}
@@ -429,12 +484,43 @@ export function OutputPanel() {
             />
           )}
 
+          {output.exportMode === 'sd-card' && (
+            <SdCardPatternPicker
+              available={availablePatterns}
+              picked={sdPickedPatterns}
+              onTogglePattern={(name) => {
+                const next = new Set(sdPickedPatterns);
+                if (next.has(name)) next.delete(name);
+                else next.add(name);
+                setSdPickedPatterns(next);
+              }}
+              onSelectAll={() => setSdPickedPatterns(new Set(availablePatterns))}
+              onSelectNone={() => setSdPickedPatterns(new Set())}
+              perPatternKb={Math.round(
+                estimateBinSize(
+                  output.exportBoards[0]?.ledCount ?? 0,
+                  output.exportSeconds,
+                  output.exportFps,
+                ) / 1024,
+              )}
+            />
+          )}
+
           <button
             onClick={onExport}
-            disabled={busy || !pattern}
+            disabled={
+              busy ||
+              (output.exportMode === 'sd-card'
+                ? sdPickedPatterns.size === 0 || output.exportBoards.length === 0
+                : !pattern)
+            }
             style={{ marginTop: 8, width: '100%' }}
           >
-            {busy ? 'Baking…' : output.exportMode === 'multi-board' && output.exportBoards.length > 0
+            {busy
+              ? 'Baking…'
+              : output.exportMode === 'sd-card'
+              ? `Bake ${sdPickedPatterns.size} patterns × ${output.exportBoards.length} boards`
+              : output.exportMode === 'multi-board' && output.exportBoards.length > 0
               ? `Bake ${output.exportBoards.length} .ino files`
               : 'Bake .ino'}
           </button>
@@ -543,6 +629,71 @@ function TargetsTable({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// -------- SD-card pattern picker --------
+//
+// Multi-select list of every available pattern. Checking a pattern
+// includes it in the bake — each checked pattern becomes one .bin per
+// board in the SD-card export.
+
+function SdCardPatternPicker({
+  available,
+  picked,
+  onTogglePattern,
+  onSelectAll,
+  onSelectNone,
+  perPatternKb,
+}: {
+  available: string[];
+  picked: Set<string>;
+  onTogglePattern: (name: string) => void;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  perPatternKb: number;
+}) {
+  const totalKb = perPatternKb * picked.size;
+  return (
+    <div style={{ marginTop: 8, fontSize: 11 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <strong>Patterns to bake ({picked.size}/{available.length})</strong>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button onClick={onSelectAll}>All</button>
+          <button onClick={onSelectNone}>None</button>
+        </div>
+      </div>
+      <div
+        style={{
+          maxHeight: 200,
+          overflowY: 'auto',
+          border: '1px solid #2a3a70',
+          borderRadius: 4,
+          padding: 4,
+        }}
+      >
+        {available.map((name) => (
+          <label
+            key={name}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}
+          >
+            <input
+              type="checkbox"
+              checked={picked.has(name)}
+              onChange={() => onTogglePattern(name)}
+            />
+            <span>{name.replace(/\.(js|mjs)$/, '')}</span>
+          </label>
+        ))}
+        {available.length === 0 && (
+          <div style={{ opacity: 0.6 }}>No patterns found. Add files to patterns/ first.</div>
+        )}
+      </div>
+      <div className="stat-line" style={{ marginTop: 4 }}>
+        Per-pattern size (per board): <strong>~{perPatternKb} KB</strong> ·
+        Total: <strong>~{totalKb.toLocaleString()} KB</strong> per board
+      </div>
     </div>
   );
 }

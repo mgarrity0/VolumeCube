@@ -184,7 +184,7 @@ export const DIG_OCTA_LABELS: readonly string[] = [
   'LED1', 'LED2', 'LED3', 'LED4', 'LED5', 'LED6', 'LED7', 'LED8',
 ];
 
-export type ExportMode = 'single-pin' | 'multi-board';
+export type ExportMode = 'single-pin' | 'multi-board' | 'sd-card';
 
 export type OutputStats = {
   fps: number;
