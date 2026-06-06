@@ -1,0 +1,63 @@
+{
+  "patternsRoot": "../patterns",
+  "fps": 30,
+  "cube": {
+    "kind": "lattice",
+    "Nx": 10,
+    "Ny": 10,
+    "Nz": 10,
+    "pitchMeters": 0.1016
+  },
+  "wiring": {
+    "chainStyle": "panels",
+    "layerOrder": "bottom-up",
+    "layerStart": "corner-00",
+    "rowDirection": "x-major",
+    "serpentine": true,
+    "layerSerpentine": false
+  },
+  "color": {
+    "brightness": 0.5,
+    "gamma": 2.2,
+    "colorOrder": "GRB",
+    "whitePoint": 1.0
+  },
+  "power": {
+    "budgetAmps": 30,
+    "perLedMaxAmps": 0.06,
+    "voltage": 12
+  },
+  "output": {
+    "kind": "sacn",
+    "sendIntervalMs": 33,
+    "wledIp": "",
+    "wledPort": 4048,
+    "targets": [
+      {
+        "id": "boardA",
+        "ip": "192.168.50.10",
+        "port": 5568,
+        "ledStart": 0,
+        "ledCount": 500,
+        "universeStart": 1
+      },
+      {
+        "id": "boardB",
+        "ip": "192.168.50.11",
+        "port": 5568,
+        "ledStart": 500,
+        "ledCount": 500,
+        "universeStart": 10
+      }
+    ]
+  },
+  "pattern": {
+    "name": "classics/harmonic-blob.js",
+    "params": {
+      "modes": 3,
+      "speed": 1,
+      "baseRadius": 0.55,
+      "colorMode": "velocity-hue"
+    }
+  }
+}

@@ -47,6 +47,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { OutputConfig, Transport, NetworkTarget } from './index';
+import type { UdpSender } from './udpSender';
 
 const SACN_DEFAULT_PORT = 5568;
 const CHANNELS_PER_UNIVERSE = 510;  // 170 RGB LEDs
@@ -77,6 +78,23 @@ export class SacnTransport implements Transport {
   // Per-universe sequence numbers — required by the spec so receivers
   // can detect dropped/reordered packets per universe.
   private seqByUniverse = new Map<number, number>();
+  private sendUdp: UdpSender | null;
+
+  /**
+   * @param sendUdp Optional UDP sender override (used by the Node-side
+   *                runtime). Falls back to Tauri's bundled `wled_send`
+   *                command when null.
+   */
+  constructor(sendUdp: UdpSender | null = null) {
+    this.sendUdp = sendUdp;
+  }
+
+  private async send(ip: string, port: number, bytes: Uint8Array): Promise<void> {
+    if (this.sendUdp) {
+      return this.sendUdp(ip, port, bytes);
+    }
+    await invoke('wled_send', { ip, port, bytes: Array.from(bytes) });
+  }
 
   async connect(cfg: OutputConfig): Promise<void> {
     const targets = resolveSacnTargets(cfg, 0);
@@ -104,11 +122,7 @@ export class SacnTransport implements Transport {
         const end = Math.min(offset + CHANNELS_PER_UNIVERSE, totalBytes);
         const payload = streamBytes.subarray(startByte + offset, startByte + end);
         const packet = this.buildPacket(universe, payload);
-        await invoke('wled_send', {
-          ip: tgt.ip,
-          port: tgt.port || SACN_DEFAULT_PORT,
-          bytes: Array.from(packet),
-        });
+        await this.send(tgt.ip, tgt.port || SACN_DEFAULT_PORT, packet);
       }
     }
   }

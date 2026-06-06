@@ -26,6 +26,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { OutputConfig, Transport, NetworkTarget } from './index';
+import type { UdpSender } from './udpSender';
 
 const DDP_HEADER_LEN = 10;
 // Safely under typical 1500-byte MTU after IP+UDP headers. WLED accepts
@@ -36,6 +37,23 @@ const DDP_MAX_PAYLOAD = 1440;
 export class WledUdpTransport implements Transport {
   readonly name = 'WLED UDP (DDP)';
   private seq = 0;
+  private sendUdp: UdpSender | null;
+
+  /**
+   * @param sendUdp Optional UDP sender override (used by the Node-side
+   *                runtime to use `dgram` instead of Tauri). When null,
+   *                falls back to the bundled Tauri `wled_send` command.
+   */
+  constructor(sendUdp: UdpSender | null = null) {
+    this.sendUdp = sendUdp;
+  }
+
+  private async send(ip: string, port: number, bytes: Uint8Array): Promise<void> {
+    if (this.sendUdp) {
+      return this.sendUdp(ip, port, bytes);
+    }
+    await invoke('wled_send', { ip, port, bytes: Array.from(bytes) });
+  }
 
   async connect(cfg: OutputConfig): Promise<void> {
     const targets = resolveTargets(cfg, 0);
@@ -45,11 +63,7 @@ export class WledUdpTransport implements Transport {
     // silently dropping frames later.
     for (const tgt of targets) {
       const probe = this.buildDdp(new Uint8Array(0), 0, true);
-      await invoke('wled_send', {
-        ip: tgt.ip,
-        port: tgt.port,
-        bytes: Array.from(probe),
-      });
+      await this.send(tgt.ip, tgt.port, probe);
     }
   }
 
@@ -86,11 +100,7 @@ export class WledUdpTransport implements Transport {
         fragIdx++;
         const push = fragIdx === totalFrags;
         const packet = this.buildDdp(slice, offsetInTarget, push);
-        await invoke('wled_send', {
-          ip: tgt.ip,
-          port: tgt.port,
-          bytes: Array.from(packet),
-        });
+        await this.send(tgt.ip, tgt.port, packet);
         sent += chunkLen;
       }
     }
