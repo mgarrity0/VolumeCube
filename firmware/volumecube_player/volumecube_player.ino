@@ -43,6 +43,13 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 // SD card chip-select pin for the QuinLED Dig-Octa Brainboard. Check
 // the silkscreen on your specific board revision and update if needed.
 const int   SD_CS_PIN     = 5;
+// If your board routes the SD slot to non-default SPI pins, set all
+// three here. -1 = use the ESP32 default VSPI pins (SCK 18, MISO 19,
+// MOSI 23). If SD.begin() fails on first boot, this is the first
+// thing to check against the quinled.info pinout.
+const int   SD_SCK_PIN    = -1;
+const int   SD_MISO_PIN   = -1;
+const int   SD_MOSI_PIN   = -1;
 // Max LEDs per output channel. Bound on the per-output buffer size we
 // allocate. 600 is the QuinLED-rated max per chain.
 const int   MAX_LEDS_PER_OUT = 600;
@@ -90,11 +97,19 @@ unsigned long gLastFrameMs = 0;
 Preferences gPrefs;
 AsyncWebServer gServer(80);
 
+// SD bus guard. ESPAsyncWebServer handlers run on the async_tcp
+// FreeRTOS task, NOT the Arduino loop task — so /api/play (which
+// closes + reopens gAnimFile) and /api/list (which walks the SD
+// directory) can otherwise collide with renderFrame()'s SD read
+// mid-frame. Every SD touch after setup() takes this mutex.
+SemaphoreHandle_t gSdMutex;
+
 // ---------------------------------------------------------------------------
 //  Forward declarations
 // ---------------------------------------------------------------------------
 bool loadBoardConfig();
 bool openAnimation(const String& name);
+static bool openAnimationLocked(const String& name);
 void renderFrame();
 void scanAnimations(JsonArray out);
 void setupWebRoutes();
@@ -110,6 +125,10 @@ void setup() {
   Serial.println("VolumeCube SD-card player booting…");
 
   // ---- SD card ----
+  gSdMutex = xSemaphoreCreateMutex();
+  if (SD_SCK_PIN >= 0) {
+    SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  }
   if (!SD.begin(SD_CS_PIN)) {
     Serial.println("FATAL: SD card mount failed. Check wiring + CS pin.");
     while (true) delay(1000);
@@ -154,13 +173,14 @@ void setup() {
   FastLED.clear();
   FastLED.show();
 
-  // ---- WiFi + web server ----
+  // ---- WiFi ----
   connectWifi();
-  setupWebRoutes();
-  gServer.begin();
-  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
 
   // ---- Pick the last-played animation or the first available ----
+  // Runs BEFORE gServer.begin() so the boot-time directory walk (which
+  // doesn't take gSdMutex — it would deadlock on the openAnimation call
+  // inside the loop) can't collide with an early /api request from a
+  // phone that still has the page open and polling.
   gPrefs.begin("vcplayer", false);
   String lastPlayed = gPrefs.getString("last", "");
   if (lastPlayed.length() && openAnimation(lastPlayed)) {
@@ -184,6 +204,11 @@ void setup() {
     }
     anims.close();
   }
+
+  // ---- Web server (last — all playback state settled) ----
+  setupWebRoutes();
+  gServer.begin();
+  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +227,13 @@ void loop() {
 }
 
 void renderFrame() {
-  if (!gAnimFile) return;
+  // SD access under the mutex; FastLED.show() outside it — show() is
+  // the slow half of the frame and never touches the SD bus.
+  xSemaphoreTake(gSdMutex, portMAX_DELAY);
+  if (!gAnimFile) {
+    xSemaphoreGive(gSdMutex);
+    return;
+  }
   size_t frameBytes = (size_t)gLedsInFile * 3;
   // Seek explicitly so we tolerate the firmware re-entering renderFrame
   // mid-file after a pattern switch.
@@ -210,6 +241,7 @@ void renderFrame() {
   gAnimFile.seek(offset);
   // Read straight into CRGB memory (== contiguous RGB byte buffer).
   size_t read = gAnimFile.read((uint8_t*)gLeds, frameBytes);
+  xSemaphoreGive(gSdMutex);
   if (read != frameBytes) {
     Serial.printf("Short read at frame %u (got %u/%u). Looping.\n",
                   gCurrentFrame, (unsigned)read, (unsigned)frameBytes);
@@ -251,6 +283,16 @@ bool loadBoardConfig() {
 }
 
 bool openAnimation(const String& name) {
+  // Callable from both the loop task (boot autoload) and the web task
+  // (/api/play) — the locked body swaps gAnimFile, so it must never
+  // run concurrently with renderFrame's read.
+  xSemaphoreTake(gSdMutex, portMAX_DELAY);
+  bool ok = openAnimationLocked(name);
+  xSemaphoreGive(gSdMutex);
+  return ok;
+}
+
+static bool openAnimationLocked(const String& name) {
   String path = "/animations/" + name;
   if (!path.endsWith(".bin")) path += ".bin";
   if (gAnimFile) gAnimFile.close();
@@ -283,6 +325,23 @@ bool openAnimation(const String& name) {
               | ((uint32_t)hdr[10] << 16) | ((uint32_t)hdr[11] << 24);
   gFrameCount  = (uint32_t)hdr[12] | ((uint32_t)hdr[13] << 8)
               | ((uint32_t)hdr[14] << 16) | ((uint32_t)hdr[15] << 24);
+  // Bounds: a corrupt or wrong-board file must never read past the
+  // CRGB buffer. Reject outright rather than clamping — a clamped
+  // playback would look subtly wrong and waste debugging time.
+  const uint32_t capacity = (uint32_t)MAX_LEDS_PER_OUT * MAX_OUTPUTS;
+  if (gLedsInFile == 0 || gLedsInFile > capacity) {
+    Serial.printf("Rejecting %s: ledCount %u exceeds buffer capacity %u\n",
+                  name.c_str(), (unsigned)gLedsInFile, (unsigned)capacity);
+    gAnimFile.close();
+    return false;
+  }
+  if (gLedsInFile != gBoard.totalLeds) {
+    Serial.printf("WARN: %s was baked for %u LEDs but this board drives %u "
+                  "(wrong Board folder on this SD card?). Playing anyway.\n",
+                  name.c_str(), (unsigned)gLedsInFile, (unsigned)gBoard.totalLeds);
+  }
+  // Guard the loop()'s 1000/gFps against a zero or absurd header value.
+  if (gFps == 0 || gFps > 120) gFps = 30;
   gCurrentFrame = 0;
   gCurrentName = name;
   gIsPlaying = true;
@@ -293,17 +352,21 @@ bool openAnimation(const String& name) {
 }
 
 void scanAnimations(JsonArray out) {
+  // Runs on the web task — must not collide with renderFrame's SD read.
+  xSemaphoreTake(gSdMutex, portMAX_DELAY);
   File anims = SD.open("/animations");
-  if (!anims) return;
-  File entry;
-  while ((entry = anims.openNextFile())) {
-    String n = entry.name();
-    int slash = n.lastIndexOf('/');
-    if (slash >= 0) n = n.substring(slash + 1);
-    if (n.endsWith(".bin")) out.add(n);
-    entry.close();
+  if (anims) {
+    File entry;
+    while ((entry = anims.openNextFile())) {
+      String n = entry.name();
+      int slash = n.lastIndexOf('/');
+      if (slash >= 0) n = n.substring(slash + 1);
+      if (n.endsWith(".bin")) out.add(n);
+      entry.close();
+    }
+    anims.close();
   }
-  anims.close();
+  xSemaphoreGive(gSdMutex);
 }
 
 // ---------------------------------------------------------------------------

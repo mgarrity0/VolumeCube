@@ -46,12 +46,17 @@ No re-flashing needed for any of the above.
 
 ## One-time setup — Arduino IDE
 
-1. Install ESP32 board support (Boards Manager → search "esp32").
-2. Install these libraries from the Library Manager:
-   - **FastLED**
-   - **ArduinoJson**
-   - **ESPAsyncWebServer**
-   - **AsyncTCP** (dependency of ESPAsyncWebServer)
+1. Install ESP32 board support (Boards Manager → search "esp32" →
+   "esp32 by Espressif Systems").
+2. Install these libraries from the Library Manager (exact names —
+   there are abandoned forks with similar names):
+   - **FastLED** (by Daniel Garcia)
+   - **ArduinoJson** (by Benoit Blanchon — v6 or v7 both work; v7
+     prints deprecation warnings about `DynamicJsonDocument`, which
+     are harmless)
+   - **ESP Async WebServer** (by ESP32Async — the maintained fork)
+   - **Async TCP** (by ESP32Async; the IDE offers to install it
+     automatically as a dependency of ESP Async WebServer — say yes)
 3. Open `volumecube_player.ino`.
 4. Edit the WiFi credentials at the top of the file (`WIFI_SSID`,
    `WIFI_PASSWORD`). Optionally check `SD_CS_PIN` matches your
