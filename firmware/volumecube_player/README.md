@@ -58,12 +58,24 @@ No re-flashing needed for any of the above.
    - **Async TCP** (by ESP32Async; the IDE offers to install it
      automatically as a dependency of ESP Async WebServer — say yes)
 3. Open `volumecube_player.ino`.
-4. Edit the WiFi credentials at the top of the file (`WIFI_SSID`,
-   `WIFI_PASSWORD`). Optionally check `SD_CS_PIN` matches your
-   Brainboard revision (5 is the standard).
+4. Pick a networking mode (see below) and set `WIFI_SSID` /
+   `WIFI_PASSWORD` accordingly. Optionally check `SD_CS_PIN` matches
+   your Brainboard revision (5 is the standard).
 5. Tools → Board → "ESP32 Dev Module".
 6. Tools → Port → COMx (whichever appears when you plug in).
 7. Upload.
+
+## Networking modes
+
+The boards need NO router, switch, or other infrastructure — just a
+phone. Three ways to run it, chosen by what you put in the WiFi
+credential constants:
+
+| Mode | Credentials | How it works |
+|---|---|---|
+| **Standalone AP** (WLED-AP style) | Leave the `YOUR_WIFI_SSID` placeholder untouched | Each board broadcasts its own network: `VolumeCube-A` / `VolumeCube-B`, password `volumecube`. Connect your phone to it and open `http://192.168.4.1/`. Zero config, fully portable. With two boards your phone hops between the two APs to control each. |
+| **Phone hotspot** | Your phone's hotspot SSID + password | Both boards join your phone's hotspot, so you control both without switching networks. Board IPs print on the serial monitor, or check the hotspot's connected-devices list. |
+| **Home WiFi** | Your house SSID + password | Both boards join the LAN. Best at home — control both simultaneously, and the cube keeps running when your phone leaves. If WiFi can't be joined within 30 s, the board falls back to Standalone AP so it's never unreachable. |
 
 ## Two-board sync
 

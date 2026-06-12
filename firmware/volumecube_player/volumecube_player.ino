@@ -208,7 +208,12 @@ void setup() {
   // ---- Web server (last — all playback state settled) ----
   setupWebRoutes();
   gServer.begin();
-  Serial.printf("Web UI: http://%s/\n", WiFi.localIP().toString().c_str());
+  // localIP() is 0.0.0.0 in AP mode — report whichever address the
+  // phone can actually reach.
+  String uiIp = (WiFi.getMode() & WIFI_AP)
+      ? WiFi.softAPIP().toString()
+      : WiFi.localIP().toString();
+  Serial.printf("Web UI: http://%s/\n", uiIp.c_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +377,23 @@ void scanAnimations(JsonArray out) {
 // ---------------------------------------------------------------------------
 //  WiFi + Web server
 // ---------------------------------------------------------------------------
+void startAccessPoint() {
+  WiFi.mode(WIFI_AP);
+  String ap = "VolumeCube-" + gBoard.boardId;
+  WiFi.softAP(ap.c_str(), "volumecube");
+  Serial.printf("AP: %s (pwd volumecube) — UI at http://%s/\n",
+                ap.c_str(), WiFi.softAPIP().toString().c_str());
+}
+
 void connectWifi() {
+  // Credentials left at the placeholder = the user WANTS standalone AP
+  // mode (the WLED-AP-style workflow). Skip the 30 s join attempt and
+  // broadcast immediately.
+  if (strcmp(WIFI_SSID, "YOUR_WIFI_SSID") == 0 || strlen(WIFI_SSID) == 0) {
+    Serial.println("No WiFi configured — starting standalone AP.");
+    startAccessPoint();
+    return;
+  }
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("Connecting to %s", WIFI_SSID);
@@ -382,11 +403,8 @@ void connectWifi() {
     Serial.print(".");
   }
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\nWiFi failed — starting AP for setup.");
-    WiFi.mode(WIFI_AP);
-    String ap = "VolumeCube-" + gBoard.boardId;
-    WiFi.softAP(ap.c_str(), "volumecube");
-    Serial.printf("AP: %s (pwd volumecube)\n", ap.c_str());
+    Serial.println("\nWiFi failed — falling back to AP mode.");
+    startAccessPoint();
   } else {
     Serial.printf("\nWiFi connected: %s\n", WiFi.localIP().toString().c_str());
   }
