@@ -54,6 +54,13 @@ import type { ExportBoard } from './index';
 export const BIN_MAGIC = [0x56, 0x43, 0x41, 0x4e]; // 'VCAN'
 export const BIN_VERSION = 1;
 export const BIN_HEADER_LEN = 16;
+// The player firmware carries the file name in its UDP sync packet, where
+// the name field is capped at SYNC_MAX_NAME (64) bytes INCLUDING ".bin".
+// A longer name gets truncated on the wire and followers can never match
+// it → they'd never play that pattern in lockstep. So the stem (name
+// without ".bin") is clamped to 60 chars at bake time, and collisions
+// from clamping/sanitizing are disambiguated with a numeric suffix.
+export const MAX_STEM = 60;
 
 export type SdCardBakeArgs = {
   /** Pattern relative paths to bake (e.g. "classics/harmonic-blob.js"). */
@@ -125,6 +132,10 @@ export async function bakeForSdCard(
   const patternBuf = new Uint8ClampedArray(total * 3);
   const dutyBuf = new Uint8ClampedArray(total * 3);
   const streamBuf = new Uint8Array(total * 3);
+  // Track emitted stems so two patterns that sanitize/clamp to the same
+  // name don't overwrite each other's .bin (and so the firmware sees
+  // distinct, matchable names).
+  const usedStems = new Set<string>();
 
   for (const patternName of patternNames) {
     onProgress?.(`Loading ${patternName}…`);
@@ -181,7 +192,7 @@ export async function bakeForSdCard(
     // Write each board's .bin file. Tauri's write_export takes a string
     // and a binary file written as a string would mangle high bytes —
     // hence the new write_export_bytes command that takes Vec<u8>.
-    const stem = sanitize(pattern.displayName);
+    const stem = uniqueStem(sanitize(pattern.displayName), usedStems);
     for (const board of boards) {
       const buf = boardBuffers.get(board.id)!;
       const relPath = `${baseDir}/Board${board.id}/animations/${stem}.bin`;
@@ -237,6 +248,30 @@ function writeBinHeader(buf: Uint8Array, fps: number, ledCount: number, frameCou
 
 function sanitize(name: string): string {
   return (name || 'pattern').replace(/[^a-z0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || 'pattern';
+}
+
+/**
+ * Clamp a stem to MAX_STEM chars and guarantee it's unique within this
+ * bake. Clamping is deterministic so both boards produce the same .bin
+ * filename — the firmware's sync packet (capped at 64 bytes incl. ".bin")
+ * then carries an untruncated, matchable name. Collisions (from clamping
+ * or sanitizing distinct display names to the same string) get a numeric
+ * suffix that itself stays within the length budget.
+ */
+function uniqueStem(raw: string, used: Set<string>): string {
+  let base = raw.slice(0, MAX_STEM);
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  for (let i = 2; ; i++) {
+    const suffix = `_${i}`;
+    const candidate = base.slice(0, MAX_STEM - suffix.length) + suffix;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
 }
 
 function timestamp(): string {

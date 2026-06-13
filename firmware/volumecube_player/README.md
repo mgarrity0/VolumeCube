@@ -25,13 +25,15 @@ re-flashing the board.
      plasma-globe.bin
      ...
    ```
-4. **Power up the boards.** Each one connects to your WiFi, prints its
-   IP on the serial monitor, and starts playing the last-selected
-   pattern (or the first `.bin` it finds if nothing was selected
-   before).
-5. **From your phone, open `http://<board-ip>/`** on the same WiFi.
-   Tap a pattern to switch; drag the brightness slider; done. The UI
-   takes ~3 KB and is served straight from the firmware.
+4. **Power up the boards.** Board A (the sync master) hosts or joins
+   the network and starts playing the last-selected pattern; followers
+   lock onto Board A's frame clock within a couple of seconds.
+5. **From your phone, open Board A's page** (standalone mode:
+   connect to the `VolumeCube` network, password `volumecube`, then
+   open `http://192.168.4.1/`). Tap a pattern — every board switches
+   in the same frame. Drag the brightness slider — the whole cube
+   follows. You never talk to follower boards; they have a debug page
+   but it's not needed in normal use.
 
 ## Adding / removing patterns later
 
@@ -69,27 +71,57 @@ No re-flashing needed for any of the above.
 
 The boards need NO router, switch, or other infrastructure — just a
 phone. Three ways to run it, chosen by what you put in the WiFi
-credential constants:
+credential constants (same constants on every board):
 
 | Mode | Credentials | How it works |
 |---|---|---|
-| **Standalone AP** (WLED-AP style) | Leave the `YOUR_WIFI_SSID` placeholder untouched | Each board broadcasts its own network: `VolumeCube-A` / `VolumeCube-B`, password `volumecube`. Connect your phone to it and open `http://192.168.4.1/`. Zero config, fully portable. With two boards your phone hops between the two APs to control each. |
-| **Phone hotspot** | Your phone's hotspot SSID + password | Both boards join your phone's hotspot, so you control both without switching networks. Board IPs print on the serial monitor, or check the hotspot's connected-devices list. |
-| **Home WiFi** | Your house SSID + password | Both boards join the LAN. Best at home — control both simultaneously, and the cube keeps running when your phone leaves. If WiFi can't be joined within 30 s, the board falls back to Standalone AP so it's never unreachable. |
+| **Standalone AP** (WLED-AP style) | Leave the `YOUR_WIFI_SSID` placeholder untouched | Board A hosts a single network named `VolumeCube` (password `volumecube`); follower boards join it automatically. Your phone connects to `VolumeCube` and opens `http://192.168.4.1/` — one network, one page, the whole cube. Zero config, fully portable. |
+| **Phone hotspot** | Your phone's hotspot SSID + password | All boards join your phone's hotspot. Control via Board A's IP (printed on its serial monitor, or check the hotspot's connected-devices list). |
+| **Home WiFi** | Your house SSID + password | All boards join the LAN; the cube keeps running when your phone leaves the house. If the join fails, Board A falls back to hosting `VolumeCube` and followers find it there — the cube is never unreachable. Caveat: if your router has "AP/client isolation" enabled, device-to-device sync broadcasts are blocked — disable isolation or use standalone mode. |
 
-## Two-board sync
+## Multi-board frame sync
 
-For the simplest setup, both boards run identical firmware and react
-independently. When you tap a pattern on the phone UI, both boards'
-APIs receive the request within milliseconds of each other (the phone
-UI knows about both IPs and fires parallel requests).
+The board whose `config.json` says `"boardId": "A"` is the **sync
+master**; every other board is a **follower**. Before each frame the
+master broadcasts a tiny UDP packet (port 22083): which file it's
+playing, which frame number, the brightness, and a playing flag.
+Followers don't keep their own frame clock while packets flow — they
+render the frame they're told to. That gives you:
 
-For an art piece this works fine. If you ever need frame-perfect sync
-between boards (no visible drift across the seam), you'd add a UDP
-broadcast: one board acts as master, sends a "current frame index"
-packet every N frames, the slave reads it and seeks to match. Not in
-this firmware version — file a request and we'll wire it up if you
-need it.
+- **One control surface.** The play/brightness controls exist *only* on
+  Board A; follower pages are read-only status. There's no way to
+  accidentally desync the cube by poking a follower.
+- **Atomic switching.** Tapping a pattern lands on every board in the
+  same frame — no window where the halves play different content.
+- **Zero drift.** Followers are frame-locked, not free-running, so the
+  crystal-oscillator drift that tears free-running boards apart over an
+  evening can't happen.
+- **Self-healing.** If sync packets stop (master rebooting, WiFi blip),
+  followers free-run their current animation at its own fps so the cube
+  doesn't freeze, then snap back to lock the instant packets resume. A
+  follower that boots before the master keeps retrying the join.
+- **Graceful mismatch.** If a follower's card is missing the file the
+  master switched to (you updated one card and forgot the other), it
+  keeps free-running whatever it already had open and logs the mismatch
+  on serial — wrong but moving beats frozen-dark. A failed open never
+  tears down the running animation.
+- **Split-network recovery.** If a follower joined home WiFi but the
+  master fell back to its own AP (router rebooted mid-boot), the
+  follower notices 60 s of silence and reboots to re-run the full
+  join hunt, finding the master's AP on the second pass. (Only arms
+  once a follower has *ever* heard the master, so a single-board bench
+  test free-runs forever instead of reboot-looping.)
+
+Scaling: nothing is pairwise. Any number of follower boards lock to
+the one master — a future 4-board build needs zero firmware changes.
+
+Note: the sync port is unauthenticated (any device on the same network
+can send a valid packet). For a home art piece on your own WiFi/AP
+that's fine; if you ever put the cube on an untrusted network, the
+followers will honor brightness/pattern commands from anything that
+speaks the protocol. NVS flash writes are debounced (≤ once / 10 s) and
+failed opens are rate-limited, so a packet flood can't wear the flash
+or thrash the SD bus, but it could still drive the lights.
 
 ## Why this isn't WLED
 

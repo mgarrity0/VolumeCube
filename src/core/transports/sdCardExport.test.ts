@@ -177,3 +177,51 @@ describe('SD-card bake — .bin file format', () => {
     expect(res.errors[0]).toContain('broken');
   });
 });
+
+describe('SD-card bake — filename length + collision (sync-name safety)', () => {
+  // The firmware sync packet caps the name at 64 bytes incl ".bin", so the
+  // stem must be clamped to 60 and stay unique across the bake or followers
+  // could never match the master's broadcast name.
+  beforeEach(async () => {
+    const { loadPattern } = await import('../patternRuntime');
+    (loadPattern as any).mockImplementation(async (name: string) => ({
+      ok: true,
+      pattern: {
+        name,
+        displayName: name.split('/').pop()!.replace(/\.js$/, ''),
+        params: {},
+        kind: 'function',
+        renderVoxel: () => [10, 20, 30],
+      },
+      source: '',
+    }));
+  });
+
+  function binNames(): string[] {
+    return wrote
+      .map((w) => w.relPath)
+      .filter((p) => /BoardA\/animations\/.+\.bin$/.test(p))
+      .map((p) => p.split('/').pop()!);
+  }
+
+  it('clamps an over-long pattern name so the wire name fits in 64 bytes', async () => {
+    const long = 'a'.repeat(80);
+    await bakeForSdCard({ ...baseArgs(), patternNames: [`classics/${long}.js`] });
+    const names = binNames();
+    expect(names.length).toBe(1);
+    // ".bin" included, total must fit the firmware's SYNC_MAX_NAME (64).
+    expect(names[0].length).toBeLessThanOrEqual(64);
+    expect(names[0].endsWith('.bin')).toBe(true);
+  });
+
+  it('disambiguates two names that clamp to the same stem', async () => {
+    // Both start with 61 identical chars → first-60 clamp collides.
+    const a = 'b'.repeat(61);
+    const b = 'b'.repeat(60) + 'c';
+    await bakeForSdCard({ ...baseArgs(), patternNames: [`classics/${a}.js`, `classics/${b}.js`] });
+    const names = binNames();
+    expect(names.length).toBe(2);
+    expect(new Set(names).size).toBe(2);          // no overwrite
+    for (const n of names) expect(n.length).toBeLessThanOrEqual(64);
+  });
+});
