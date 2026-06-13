@@ -1,25 +1,29 @@
-// Lightning — branching strikes from the top face down to the floor.
+// Lightning — crisp branching strikes that stab from the top face to the floor.
 //
 // Each bolt is a polyline built by random-walking down the Y axis with
-// jittered X/Z perturbations. At each main-bolt segment we may spawn a
-// short secondary branch (single-level, dies fast). Bolts have a sharp
-// flash → exponential-decay envelope; a brief ambient flash brightens
-// every voxel during the peak so the cube reads like a room being lit
-// by the strike, not just a bolt floating in dark.
+// jittered X/Z perturbations. At each main-bolt trunk point we may spawn a
+// short secondary branch (single-level, dies fast). Bolts have an instant
+// white-hot strike → fast exponential-decay envelope, with a couple of rapid
+// re-strike "stutters" so each flash flickers like the real thing.
 //
-// The "isBranch" flag on each segment dims the branch trail to ~45% of
-// the trunk so the eye still follows the main bolt.
+// The bolt itself is the hero: a blinding white core wrapped in a thin
+// electric-blue glow, drawn with squared falloff so edges stay razor-crisp
+// under bloom. The ambient room-flash is now a BRIEF, GLOW-FALLOFF wash that
+// is brightest near the bolt and decays toward the cube edges — it lasts only
+// a few frames at the strike peak, then the volume falls truly dark between
+// strikes for maximum dynamic range. No more flat full-cube grey.
 
 export const params = {
-  strikeRate:   { type: 'range', min: 0.2, max: 5,    step: 0.05, default: 1.0,  label: 'Strikes/sec' },
-  boltLife:     { type: 'range', min: 0.1, max: 1.5,  step: 0.02, default: 0.5,  label: 'Bolt life (sec)' },
-  branchChance: { type: 'range', min: 0,   max: 0.4,  step: 0.01, default: 0.18 },
-  jitter:       { type: 'range', min: 0,   max: 1.5,  step: 0.02, default: 0.5,  label: 'Path jitter' },
-  flashAmount:  { type: 'range', min: 0,   max: 0.5,  step: 0.01, default: 0.12, label: 'Ambient flash' },
-  boltColor:    { type: 'color', default: '#e0d8ff' },
-  flashColor:   { type: 'color', default: '#8090ff' },
+  strikeRate:   { type: 'range', min: 0.2, max: 5,    step: 0.05, default: 1.2,  label: 'Strikes/sec' },
+  boltLife:     { type: 'range', min: 0.1, max: 1.5,  step: 0.02, default: 0.42, label: 'Bolt life (sec)' },
+  branchChance: { type: 'range', min: 0,   max: 0.4,  step: 0.01, default: 0.20 },
+  jitter:       { type: 'range', min: 0,   max: 1.5,  step: 0.02, default: 0.55, label: 'Path jitter' },
+  flashAmount:  { type: 'range', min: 0,   max: 0.6,  step: 0.01, default: 0.30, label: 'Halo flash' },
+  boltColor:    { type: 'color', default: '#eef0ff' },
+  flashColor:   { type: 'color', default: '#5a78ff' },
 };
 
+// Additive trilinear splat of a point light into the 8 surrounding voxels.
 function splat(out, Nx, Ny, Nz, x, y, z, r, g, b) {
   const x0 = Math.floor(x), y0 = Math.floor(y), z0 = Math.floor(z);
   const fx = x - x0, fy = y - y0, fz = z - z0;
@@ -41,28 +45,41 @@ function splat(out, Nx, Ny, Nz, x, y, z, r, g, b) {
 function generateBolt(Nx, Ny, Nz, branchChance, jitter) {
   const segs = []; // [x0, y0, z0, x1, y1, z1, isBranch]
   // Strike origin: somewhere near the top face, not always dead-center.
-  const startX = Nx / 2 + (Math.random() - 0.5) * Nx * 0.4;
-  const startZ = Nz / 2 + (Math.random() - 0.5) * Nz * 0.4;
+  const startX = Nx / 2 + (Math.random() - 0.5) * Nx * 0.5;
+  const startZ = Nz / 2 + (Math.random() - 0.5) * Nz * 0.5;
   const startY = Ny - 0.5;
+  // Gentle bias toward a random landing point so the trunk has a clear path.
+  const targetX = Math.random() * (Nx - 1);
+  const targetZ = Math.random() * (Nz - 1);
 
-  function walk(x, y, z, isBranch, branchProb) {
-    while (y > 0) {
-      const yStep = 0.5 + Math.random() * 0.7;
+  function walk(x, y, z, isBranch) {
+    let steps = 0;
+    while (y > 0 && steps < Ny * 3 + 8) {
+      steps++;
+      const yStep = 0.45 + Math.random() * 0.65;
       const ny = Math.max(0, y - yStep);
-      const nx = Math.max(-0.5, Math.min(Nx - 0.5, x + (Math.random() - 0.5) * jitter * 4));
-      const nz = Math.max(-0.5, Math.min(Nz - 0.5, z + (Math.random() - 0.5) * jitter * 4));
+      // Trunk drifts toward its landing target; branches wander free.
+      const fall = isBranch ? 0 : (1 - y / Math.max(1, Ny)) * 0.25;
+      const biasX = isBranch ? 0 : (targetX - x) * fall;
+      const biasZ = isBranch ? 0 : (targetZ - z) * fall;
+      const nx = Math.max(0, Math.min(Nx - 1, x + biasX + (Math.random() - 0.5) * jitter * 4));
+      const nz = Math.max(0, Math.min(Nz - 1, z + biasZ + (Math.random() - 0.5) * jitter * 4));
       segs.push([x, y, z, nx, ny, nz, isBranch]);
-      // Spawn a single-level branch from current trunk point.
-      if (!isBranch && Math.random() < branchProb && y < Ny - 1) {
-        walk(x, y, z, true, 0);
+      // Spawn a single-level branch off the trunk (not too near the top).
+      if (!isBranch && Math.random() < branchChance && y < Ny - 1) {
+        walk(x, y, z, true);
       }
       x = nx; y = ny; z = nz;
-      // Branches die early — they're just spritzes off the trunk.
-      if (isBranch && Math.random() < 0.4) break;
+      // Branches are short spritzes — they die fast.
+      if (isBranch && Math.random() < 0.45) break;
     }
   }
-  walk(startX, startY, startZ, false, branchChance);
-  return segs;
+  walk(startX, startY, startZ, false);
+  // Centroid of the bolt, used to anchor the halo flash near the strike.
+  let cx = 0, cy = 0, cz = 0;
+  for (const s of segs) { cx += s[0]; cy += s[1]; cz += s[2]; }
+  const n = Math.max(1, segs.length);
+  return { segs, hx: cx / n, hy: cy / n, hz: cz / n };
 }
 
 export default class Lightning {
@@ -70,19 +87,28 @@ export default class Lightning {
 
   setup() {
     this.bolts = [];
-    this.nextStrikeT = 0.2; // brief warm-up before first strike
+    this.nextStrikeT = 0.25; // brief warm-up before first strike
   }
 
   update(ctx) {
-    const { dt, t, Nx, Ny, Nz, params } = ctx;
+    const { dt, t, Nx, Ny, Nz, params, audio } = ctx;
 
-    if (t >= this.nextStrikeT) {
+    // Audio beat (when present) can trigger an extra strike for liveliness.
+    const beat = audio && audio.beat;
+
+    if (t >= this.nextStrikeT || beat) {
+      const b = generateBolt(Nx, Ny, Nz, params.branchChance, params.jitter);
       this.bolts.push({
-        segs: generateBolt(Nx, Ny, Nz, params.branchChance, params.jitter),
+        segs: b.segs,
+        hx: b.hx, hy: b.hy, hz: b.hz,
         age: 0,
         life: params.boltLife * (0.7 + Math.random() * 0.6),
+        // Phase offset so each bolt's stutter flicker is unique.
+        seed: Math.random() * 100,
       });
-      this.nextStrikeT = t + (0.4 + Math.random() * 0.8) / Math.max(0.1, params.strikeRate);
+      if (t >= this.nextStrikeT) {
+        this.nextStrikeT = t + (0.35 + Math.random() * 0.9) / Math.max(0.1, params.strikeRate);
+      }
     }
 
     for (let i = this.bolts.length - 1; i >= 0; i--) {
@@ -97,40 +123,87 @@ export default class Lightning {
 
     const [br, bg, bb] = utils.parseColor(params.boltColor);
     const [fr, fg, fb] = utils.parseColor(params.flashColor);
-    let ambientFlash = 0;
 
     for (const bolt of this.bolts) {
-      const ageT = bolt.age / bolt.life;
-      // Sharp 5% rise, power-decay over the rest.
-      const intensity = ageT < 0.05
-        ? ageT / 0.05
-        : Math.pow(1 - (ageT - 0.05) / 0.95, 1.8);
-      // Ambient room-flash only during the first quarter of the strike.
-      if (ageT < 0.25) ambientFlash = Math.max(ambientFlash, (1 - ageT / 0.25) * params.flashAmount);
+      const ageT = bolt.age / Math.max(1e-4, bolt.life);
+
+      // Envelope: near-instant strike, fast power-decay tail.
+      let env = ageT < 0.04
+        ? ageT / 0.04
+        : Math.pow(1 - (ageT - 0.04) / 0.96, 2.4);
+
+      // Stutter: a couple of rapid re-strikes early in the flash give the
+      // bolt that nervous electric flicker instead of a smooth fade.
+      const flick = 0.7 + 0.3 * Math.sin((ageT * 38 + bolt.seed) * 6.28318);
+      const reStrike = ageT < 0.32 ? (0.85 + 0.15 * Math.sin(ageT * 90 + bolt.seed)) : 1;
+      const intensity = env * flick * reStrike;
+      if (intensity <= 0.001) continue;
+
+      // --- Draw the bolt: blinding white core + thin electric-blue glow ---
+      // Core is pushed toward white so it clips bright; glow carries the hue.
+      const coreR = (br * 0.35 + 255 * 0.65) * intensity;
+      const coreG = (bg * 0.35 + 255 * 0.65) * intensity;
+      const coreB = (bb * 0.35 + 255 * 0.65) * intensity;
+      const glowR = br * 0.5 * intensity;
+      const glowG = bg * 0.5 * intensity;
+      const glowB = bb * 0.5 * intensity;
 
       for (const seg of bolt.segs) {
         const x0 = seg[0], y0 = seg[1], z0 = seg[2];
         const x1 = seg[3], y1 = seg[4], z1 = seg[5];
         const isBranch = seg[6];
-        const k = isBranch ? 0.45 : 1.0;
+        const k = isBranch ? 0.5 : 1.0;
         const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
         const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const n = Math.max(2, Math.ceil(len * 2));
+        const n = Math.max(2, Math.ceil(len * 3));
         for (let i = 0; i <= n; i++) {
           const u = i / n;
-          splat(out, Nx, Ny, Nz, x0 + dx * u, y0 + dy * u, z0 + dz * u,
-                br * intensity * k, bg * intensity * k, bb * intensity * k);
+          const px = x0 + dx * u, py = y0 + dy * u, pz = z0 + dz * u;
+          // Bright crisp core.
+          splat(out, Nx, Ny, Nz, px, py, pz, coreR * k, coreG * k, coreB * k);
+          // Thin colored glow on the +X/+Z neighbors for a touch of bleed.
+          if (!isBranch) {
+            splat(out, Nx, Ny, Nz, px + 0.6, py, pz, glowR, glowG, glowB);
+            splat(out, Nx, Ny, Nz, px, py, pz + 0.6, glowR, glowG, glowB);
+            splat(out, Nx, Ny, Nz, px - 0.6, py, pz, glowR, glowG, glowB);
+          }
         }
       }
-    }
 
-    // Apply room-flash on top of bolts.
-    if (ambientFlash > 0) {
-      const total = Nx * Ny * Nz;
-      for (let i = 0; i < total; i++) {
-        out[i * 3 + 0] = Math.min(255, out[i * 3 + 0] + fr * ambientFlash);
-        out[i * 3 + 1] = Math.min(255, out[i * 3 + 1] + fg * ambientFlash);
-        out[i * 3 + 2] = Math.min(255, out[i * 3 + 2] + fb * ambientFlash);
+      // --- Brief halo flash anchored at the bolt, falling off with distance ---
+      // Only fires in the first ~18% of the bolt's life (a few frames), and
+      // its brightness drops with distance from the bolt centroid so the cube
+      // never washes to flat grey. Edges of the volume stay dark.
+      if (ageT < 0.18 && params.flashAmount > 0) {
+        const haloEnv = (1 - ageT / 0.18);
+        const peak = haloEnv * haloEnv * params.flashAmount; // sharp brief pop
+        if (peak > 0.002) {
+          const hx = bolt.hx, hy = bolt.hy, hz = bolt.hz;
+          // Falloff radius scales with the LARGEST horizontal/vertical span so
+          // thin slabs (small Nz) don't get washed edge-to-edge — the halo
+          // stays a localized hero-glow, never a flat fill.
+          const span = Math.min(Math.max(Nx, Ny), Math.max(Nx, Math.max(Ny, Nz)));
+          const rad = Math.max(2, span * 0.5);
+          const invR2 = 1 / (rad * rad);
+          for (let x = 0; x < Nx; x++) {
+            const ddx = x - hx;
+            for (let y = 0; y < Ny; y++) {
+              const ddy = y - hy;
+              for (let z = 0; z < Nz; z++) {
+                const ddz = z - hz;
+                const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+                // Smooth inverse-square-ish falloff, clamped to 0 at the edge.
+                let g = 1 - d2 * invR2;
+                if (g <= 0) continue;
+                g = g * g * peak;
+                const idx = (x * Ny + y) * Nz + z;
+                out[idx * 3 + 0] = Math.min(255, out[idx * 3 + 0] + fr * g);
+                out[idx * 3 + 1] = Math.min(255, out[idx * 3 + 1] + fg * g);
+                out[idx * 3 + 2] = Math.min(255, out[idx * 3 + 2] + fb * g);
+              }
+            }
+          }
+        }
       }
     }
   }

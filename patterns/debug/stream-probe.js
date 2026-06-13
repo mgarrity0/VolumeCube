@@ -11,6 +11,12 @@
 // Also includes a faint background that paints every voxel by its logical
 // position in the stream, so you can eyeball the full numbering at a
 // glance (toggle with `showRamp`).
+//
+// Legibility aids (this is a DIAGNOSTIC, not decoration):
+//   * The head has a pure-white over-bright core so it's unmistakable even
+//     against the colored ramp, with a quadratic tail fading behind it.
+//   * The ramp is brightness-boosted at index 0 and 100% so the start and
+//     end of the strip are obvious reference points when reading the path.
 
 export const params = {
   speed:     { type: 'range', min: 0.5, max: 200, step: 0.5, default: 20, label: 'LEDs / sec' },
@@ -27,17 +33,23 @@ export default class StreamProbe {
 
   render(ctx, out) {
     const { t, Nx, Ny, Nz, params, utils } = ctx;
-    const total = Nx * Ny * Nz;
-    const head = (t * params.speed) % total;
+    const total = Math.max(1, Nx * Ny * Nz);
+    const tailLen = Math.max(1, params.tailLen);
+    const head = ((t * params.speed) % total + total) % total;
     const [hr, hg, hb] = utils.parseColor(params.headColor);
     const ramp = params.showRamp ? params.rampLevel : 0;
+    const denom = total > 1 ? total - 1 : 1;
 
     for (let i = 0; i < total; i++) {
       // Faint ramp so the full strip is visible, colored by position.
       let r = 0, g = 0, b = 0;
       if (ramp > 0) {
         const hue = i / total;
-        const [rr, gg, bb] = utils.hsv(hue, 0.8, ramp);
+        // Mark the two endpoints brighter so the strip's start/end read at a
+        // glance — they are the anchors for verifying the wiring direction.
+        const isEndpoint = i === 0 || i === total - 1;
+        const lvl = isEndpoint ? Math.min(0.6, ramp * 3) : ramp;
+        const [rr, gg, bb] = utils.hsv(hue, 0.85, lvl);
         r = rr; g = gg; b = bb;
       }
 
@@ -45,12 +57,18 @@ export default class StreamProbe {
       // cleanly back to i=0 without a visible seam.
       let d = head - i;
       if (d < 0) d += total;
-      if (d < params.tailLen) {
-        const k = 1 - d / params.tailLen;
+      if (d < tailLen) {
+        const k = 1 - d / tailLen;
         const intensity = k * k; // quadratic falloff reads as a sharper head
-        r = Math.max(r, hr * intensity);
-        g = Math.max(g, hg * intensity);
-        b = Math.max(b, hb * intensity);
+        // The leading voxel gets a pure-white over-bright core so the head is
+        // unmistakable even when it sits on top of a saturated ramp color.
+        if (d < 1) {
+          r = 255; g = 255; b = 255;
+        } else {
+          r = Math.max(r, hr * intensity);
+          g = Math.max(g, hg * intensity);
+          b = Math.max(b, hb * intensity);
+        }
       }
 
       out[i * 3 + 0] = Math.min(255, r);

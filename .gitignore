@@ -27,6 +27,6 @@ dist-ssr
 src-tauri/target
 src-tauri/gen/schemas
 
-# Baked FastLED sketches (user output)
-exports/*.ino
+# Baked output artifacts (FastLED sketches, SD-card .bin animations)
+exports/
 
