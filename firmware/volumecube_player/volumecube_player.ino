@@ -69,18 +69,20 @@
 #include <ESPmDNS.h>
 
 // ---- Edit these for your network --------------------------------------------
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-// SD card chip-select pin for the QuinLED Dig-Octa Brainboard. Check
-// the silkscreen on your specific board revision and update if needed.
-const int   SD_CS_PIN     = 5;
-// If your board routes the SD slot to non-default SPI pins, set all
-// three here. -1 = use the ESP32 default VSPI pins (SCK 18, MISO 19,
-// MOSI 23). If SD.begin() fails on first boot, this is the first
-// thing to check against the quinled.info pinout.
-const int   SD_SCK_PIN    = -1;
-const int   SD_MISO_PIN   = -1;
-const int   SD_MOSI_PIN   = -1;
+const char* WIFI_SSID     = "";
+const char* WIFI_PASSWORD = "";
+// microSD SPI pins — VERIFIED from the QuinLED Dig-Octa Brainboard-32-8L
+// pinout guide (quinled.info). These are NOT the ESP32 defaults; the
+// Brainboard routes the onboard microSD to its own GPIOs:
+//   CS=16, SCK=14, MOSI=15, MISO=36 (GPIO36 is input-only — fine, MISO
+//   is read-only). None collide with the LED outputs (0-5,12,13).
+// NOTE: on v2r2+ boards GPIO14/15/16 share a jumper with the I2S mic
+// header — if SD still won't mount with these pins, make sure that
+// jumper is set to enable the microSD (not the mic).
+const int   SD_CS_PIN     = 16;
+const int   SD_SCK_PIN    = 14;
+const int   SD_MISO_PIN   = 36;
+const int   SD_MOSI_PIN   = 15;
 // Max LEDs per output channel. Bound on the per-output buffer size we
 // allocate. 600 is the QuinLED-rated max per chain.
 const int   MAX_LEDS_PER_OUT = 600;
@@ -205,14 +207,42 @@ void setup() {
   gStateMutex = xSemaphoreCreateMutex();
 
   // ---- SD card ----
+  // Print the configured pins FIRST — this line proves which firmware
+  // build is actually running. If you don't see "CS=16 SCK=14..." here,
+  // the board is running a stale flash and the upload didn't take.
+  Serial.printf("SD config: CS=%d SCK=%d MOSI=%d MISO=%d\n",
+                SD_CS_PIN, SD_SCK_PIN, SD_MOSI_PIN, SD_MISO_PIN);
   if (SD_SCK_PIN >= 0) {
     SPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
   }
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial.println("FATAL: SD card mount failed. Check wiring + CS pin.");
+  // Try descending SPI clocks. SD over the Brainboard's broken-out header
+  // (longer traces + the SD-disable jumper's series resistors) often
+  // won't train at the 4 MHz default but mounts fine slower. If it only
+  // works at 400 kHz, that's a signal-integrity hint (reseat / shorter
+  // wiring) but it'll still play.
+  const uint32_t sdFreqs[] = { 4000000, 1000000, 400000 };
+  bool sdOk = false;
+  for (unsigned fi = 0; fi < 3 && !sdOk; fi++) {
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      if (SD.begin(SD_CS_PIN, SPI, sdFreqs[fi])) {
+        Serial.printf("SD mounted at %u Hz.\n", (unsigned)sdFreqs[fi]);
+        sdOk = true;
+        break;
+      }
+      Serial.printf("SD.begin @ %u Hz attempt %d/2 failed…\n", (unsigned)sdFreqs[fi], attempt);
+      delay(250);
+    }
+  }
+  if (!sdOk) {
+    Serial.println("FATAL: SD card mount failed.");
+    Serial.println("  Checklist: (1) right firmware (see SD config line above),");
+    Serial.println("  (2) card seated, (3) card is FAT32, (4) on v2r2+ boards the");
+    Serial.println("  SD-enable jumper is set to microSD (not the I2S mic).");
     while (true) delay(1000);
   }
-  Serial.println("SD mounted.");
+  uint8_t cardType = SD.cardType();
+  uint64_t cardMB = SD.cardSize() / (1024ULL * 1024ULL);
+  Serial.printf("SD mounted. type=%u size=%lluMB\n", (unsigned)cardType, (unsigned long long)cardMB);
 
   // ---- Board config ----
   if (!loadBoardConfig()) {
