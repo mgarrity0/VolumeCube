@@ -66,6 +66,7 @@
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
+#include <ESPmDNS.h>
 
 // ---- Edit these for your network --------------------------------------------
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
@@ -287,10 +288,25 @@ void setup() {
   // ---- Web server (last — playback state settled) ----
   setupWebRoutes();
   gServer.begin();
+
+  // mDNS — reach the cube by NAME with no serial cable and no IP hunting,
+  // which is what you want in the field. Open http://volumecube.local/ on
+  // any phone on the same network (works on the master's own AP too).
+  // The master is "volumecube"; followers get a per-id name so two boards
+  // never collide on the same .local name. You only ever browse the master.
+  String host = gIsMaster ? String("volumecube") : ("volumecube-" + gBoard.boardId);
+  host.toLowerCase();
+  if (MDNS.begin(host.c_str())) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("mDNS up: http://%s.local/\n", host.c_str());
+  } else {
+    Serial.println("mDNS failed to start — fall back to the IP below.");
+  }
+
   String uiIp = (WiFi.getMode() & WIFI_AP)
       ? WiFi.softAPIP().toString()
       : WiFi.localIP().toString();
-  Serial.printf("Web UI: http://%s/\n", uiIp.c_str());
+  Serial.printf("Web UI: http://%s.local/  (or http://%s/)\n", host.c_str(), uiIp.c_str());
 }
 
 // ---------------------------------------------------------------------------

@@ -28,12 +28,25 @@ re-flashing the board.
 4. **Power up the boards.** Board A (the sync master) hosts or joins
    the network and starts playing the last-selected pattern; followers
    lock onto Board A's frame clock within a couple of seconds.
-5. **From your phone, open Board A's page** (standalone mode:
-   connect to the `VolumeCube` network, password `volumecube`, then
-   open `http://192.168.4.1/`). Tap a pattern — every board switches
-   in the same frame. Drag the brightness slider — the whole cube
-   follows. You never talk to follower boards; they have a debug page
-   but it's not needed in normal use.
+5. **From your phone, open Board A's page.** Easiest in the field:
+   browse to **`http://volumecube.local/`** — the board advertises that
+   name over mDNS, so you never need to know its IP. (Standalone AP
+   mode: first join the `VolumeCube` Wi-Fi, password `volumecube`.)
+   Tap a pattern — every board switches in the same frame. Drag the
+   brightness slider — the whole cube follows. You never talk to
+   follower boards; they have a debug page but it's not needed.
+
+### Finding the cube with no serial cable (field use)
+You will not always have a laptop + serial monitor. In order of ease:
+1. **`http://volumecube.local/`** — works on iOS/Safari out of the box
+   and on Android 12+ in Chrome. The board (master) always answers to
+   this name on whatever network it joined, including its own AP.
+2. **Your phone's hotspot device list** — if the cube joined your phone
+   hotspot, the hotspot settings list connected devices with their IP.
+3. **A network scanner app** (e.g. Fing) — shows every device's IP;
+   look for the ESP32 / espressif vendor.
+   (Followers advertise `volumecube-<id>.local`, but you only ever need
+   the master's page.)
 
 ## Adding / removing patterns later
 
