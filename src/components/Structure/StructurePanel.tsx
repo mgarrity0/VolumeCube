@@ -53,6 +53,8 @@ export function StructurePanel() {
   const patchWiring = useAppStore((s) => s.patchWiring);
   const showWiringPath = useAppStore((s) => s.showWiringPath);
   const setShowWiringPath = useAppStore((s) => s.setShowWiringPath);
+  const showWiringComet = useAppStore((s) => s.showWiringComet);
+  const setShowWiringComet = useAppStore((s) => s.setShowWiringComet);
   const activePattern = useAppStore((s) => s.pattern.active);
   const setActivePattern = useAppStore((s) => s.setActivePattern);
 
@@ -199,12 +201,23 @@ export function StructurePanel() {
         />
       </div>
       {showWiringPath && (
-        <div className="stat-line" style={{ opacity: 0.75, fontSize: 11, lineHeight: 1.5 }}>
-          <span style={{ color: '#28ff5a' }}>▶ green = START</span> &nbsp;·&nbsp;
-          <span style={{ color: '#ff5a5a' }}>■ red = END</span><br />
-          The streaking dot shows data-flow direction;{' '}
-          <span style={{ color: '#30d0ff' }}>cyan ticks</span> mark each output's first LED.
-        </div>
+        <>
+          <div className="field">
+            <span>Running probe (flow)</span>
+            <input
+              type="checkbox"
+              checked={showWiringComet}
+              onChange={(e) => setShowWiringComet(e.target.checked)}
+              title="The white dot that streaks along the path showing data-flow direction. Turn off to read the static labels/ticks without the motion."
+            />
+          </div>
+          <div className="stat-line" style={{ opacity: 0.75, fontSize: 11, lineHeight: 1.5 }}>
+            <span style={{ color: '#28ff5a' }}>▶ green = START</span> &nbsp;·&nbsp;
+            <span style={{ color: '#ff5a5a' }}>■ red = END</span><br />
+            <span style={{ color: '#30d0ff' }}>cyan ticks</span> mark each output's first LED
+            {showWiringComet ? '; the streaking dot shows data-flow direction.' : '.'}
+          </div>
+        </>
       )}
     </section>
   );

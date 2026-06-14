@@ -46,6 +46,7 @@ const labelBase: React.CSSProperties = {
 
 export function WiringPathOverlay() {
   const show = useAppStore((s) => s.showWiringPath);
+  const showComet = useAppStore((s) => s.showWiringComet);
   const cube = useAppStore((s) => s.cube);
   const wiring = useAppStore((s) => s.wiring);
   const output = useAppStore((s) => s.output);
@@ -114,7 +115,7 @@ export function WiringPathOverlay() {
   // primary "which way" cue — no need to decode the gradient.
   useFrame((_, dt) => {
     const mesh = cometRef.current;
-    if (!mesh || count < 2) return;
+    if (!mesh || count < 2 || !showComet) return;
     const { dummy, col } = scratch;
     const speed = count / COMET_SECONDS; // LEDs per second
     head.current = (head.current + dt * speed) % count;
@@ -174,14 +175,17 @@ export function WiringPathOverlay() {
       </ThreeLine>
 
       {/* Flow comet — bright head + fading tail, no per-instance vertex
-          colors (InstancedMesh instanceColor is what we drive). */}
-      <instancedMesh
-        ref={cometRef}
-        args={[cometGeometry, undefined, COMET_LEN]}
-        frustumCulled={false}
-      >
-        <meshBasicMaterial toneMapped={false} transparent depthTest={false} />
-      </instancedMesh>
+          colors (InstancedMesh instanceColor is what we drive). Toggle
+          off to read the static labels/ticks without the motion. */}
+      {showComet && (
+        <instancedMesh
+          ref={cometRef}
+          args={[cometGeometry, undefined, COMET_LEN]}
+          frustumCulled={false}
+        >
+          <meshBasicMaterial toneMapped={false} transparent depthTest={false} />
+        </instancedMesh>
+      )}
 
       {/* START — green, labeled. */}
       <mesh position={startPos}>

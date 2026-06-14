@@ -57,6 +57,9 @@ export type AppState = {
   cameraPreset: CameraPreset;
   structureMode: StructureMode;
   showWiringPath: boolean;
+  // The animated flow "comet" on the wiring path — on by default, but
+  // toggleable so the static labels/ticks can be read without the motion.
+  showWiringComet: boolean;
   showShortcuts: boolean;
   // Monotonic token bumped by keyboard "S" shortcut or toolbar button;
   // the <Cube /> component watches this and grabs the GL canvas on the
@@ -65,6 +68,7 @@ export type AppState = {
   setCameraPreset: (p: CameraPreset) => void;
   setStructureMode: (m: StructureMode) => void;
   setShowWiringPath: (v: boolean) => void;
+  setShowWiringComet: (v: boolean) => void;
   setShowShortcuts: (v: boolean) => void;
   requestSnapshot: () => void;
 
@@ -119,11 +123,13 @@ export const useAppStore = create<AppState>((set) => ({
   cameraPreset: 'orbit',
   structureMode: 'ghost',
   showWiringPath: false,
+  showWiringComet: true,
   showShortcuts: false,
   snapshotToken: 0,
   setCameraPreset: (p) => set({ cameraPreset: p }),
   setStructureMode: (m) => set({ structureMode: m }),
   setShowWiringPath: (v) => set({ showWiringPath: v }),
+  setShowWiringComet: (v) => set({ showWiringComet: v }),
   setShowShortcuts: (v) => set({ showShortcuts: v }),
   requestSnapshot: () => set((s) => ({ snapshotToken: s.snapshotToken + 1 })),
 
