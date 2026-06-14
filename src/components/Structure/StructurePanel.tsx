@@ -198,6 +198,14 @@ export function StructurePanel() {
           onChange={(e) => setShowWiringPath(e.target.checked)}
         />
       </div>
+      {showWiringPath && (
+        <div className="stat-line" style={{ opacity: 0.75, fontSize: 11, lineHeight: 1.5 }}>
+          <span style={{ color: '#28ff5a' }}>▶ green = START</span> &nbsp;·&nbsp;
+          <span style={{ color: '#ff5a5a' }}>■ red = END</span><br />
+          The streaking dot shows data-flow direction;{' '}
+          <span style={{ color: '#30d0ff' }}>cyan ticks</span> mark each output's first LED.
+        </div>
+      )}
     </section>
   );
 }

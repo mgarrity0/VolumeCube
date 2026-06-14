@@ -1,39 +1,56 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
+import { Html } from '@react-three/drei';
 import { useAppStore } from '../../state/store';
 import { buildCoords, spacing } from '../../core/cubeGeometry';
 import { buildAddressMapForCube, buildStreamPath } from '../../core/wiring';
 
-// Wiring overlay: polyline through every LED in stream order, ~50
-// arrowhead cones spaced along it pointing in the data-flow direction,
-// plus distinct START and END markers. Used to verify that the wiring
-// config in StructurePanel matches the real cube — if the line enters
-// at the wrong corner or hops on the wrong axis, the overlay will
-// visibly disagree with the strip route.
+// Wiring overlay — built to answer one question fast: "which end is the
+// start, and which way does the data flow?" Three unambiguous cues, no
+// color-memorization required:
 //
-// Color: HSL sweep red (start) → blue (end) on both line and arrows so
-// flow direction reads at a glance even before you see the cones. The
-// START marker is a bright white-yellow sphere (large, blooms hard)
-// and the END marker is a smaller dark sphere — unambiguous which end
-// is which from any angle.
+//   1. Floating TEXT labels: a green "▶ START · 0" tag at the first LED
+//      and a red "■ END · N" tag at the last. The words remove all doubt.
+//   2. A glowing COMET that continuously streaks along the wire in the
+//      data-flow direction (start → end, then repeats). Direction reads
+//      at a glance even in a still glance, and it's mesmerizing-not-noisy.
+//   3. Labeled TICKS at each output boundary (pulled from the FastLED
+//      multi-output bake layout) — e.g. "Q2 · 200" sits exactly where
+//      output 2's chain begins, so you can map the physical strip to the
+//      data order one output at a time.
+//
+// A faint red→blue gradient line still traces the full route underneath.
 
-const TARGET_ARROW_COUNT = 48;
-const ARROW_SIZE_RATIO = 0.6;      // arrow length as a fraction of LED pitch
-const START_MARKER_RATIO = 0.85;   // start sphere radius vs pitch
-const END_MARKER_RATIO = 0.55;     // end sphere radius vs pitch
+const START_MARKER_RATIO = 0.8;    // start sphere radius vs LED pitch
+const END_MARKER_RATIO = 0.7;      // end sphere radius vs LED pitch
+const TICK_MARKER_RATIO = 0.5;     // output-boundary tick radius vs pitch
+const COMET_LEN = 14;              // head + tail segments
+const COMET_SECONDS = 4.5;         // time for the comet to traverse the whole path
 
-type Arrow = {
-  px: number; py: number; pz: number;
-  dx: number; dy: number; dz: number;
-  r: number; g: number; b: number;
+type Tick = { pos: [number, number, number]; label: string };
+
+const labelBase: React.CSSProperties = {
+  pointerEvents: 'none',
+  userSelect: 'none',
+  whiteSpace: 'nowrap',
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+  fontSize: 11,
+  fontWeight: 700,
+  padding: '2px 6px',
+  borderRadius: 5,
+  color: '#fff',
+  transform: 'translateY(-1.4em)',   // float just above the marker sphere
+  boxShadow: '0 1px 4px rgba(0,0,0,0.6)',
 };
 
 export function WiringPathOverlay() {
   const show = useAppStore((s) => s.showWiringPath);
   const cube = useAppStore((s) => s.cube);
   const wiring = useAppStore((s) => s.wiring);
+  const output = useAppStore((s) => s.output);
 
-  const { positions, colors, arrows, startPos, endPos } = useMemo(() => {
+  const { positions, colors, startPos, endPos, count, ticks } = useMemo(() => {
     const logical = buildCoords(cube).positions;
     const map = buildAddressMapForCube(cube, wiring);
     const streamPositions = buildStreamPath(map, logical);
@@ -43,54 +60,37 @@ export function WiringPathOverlay() {
     const tmp = new THREE.Color();
     for (let i = 0; i < count; i++) {
       const t = count > 1 ? i / (count - 1) : 0;
-      // Red → yellow → green → cyan → blue as the stream progresses.
+      // Red (start) → yellow → green → cyan → blue (end).
       tmp.setHSL(t * 0.7, 0.9, 0.55);
       c[i * 3 + 0] = tmp.r;
       c[i * 3 + 1] = tmp.g;
       c[i * 3 + 2] = tmp.b;
     }
 
-    // Sample arrow positions evenly along the stream. Skip degenerate
-    // segments (zero-length, in case of duplicate endpoints).
-    const arrowList: Arrow[] = [];
-    if (count >= 2) {
-      const stride = Math.max(1, Math.floor((count - 1) / TARGET_ARROW_COUNT));
-      for (let i = stride; i < count; i += stride) {
-        const x0 = streamPositions[(i - 1) * 3 + 0];
-        const y0 = streamPositions[(i - 1) * 3 + 1];
-        const z0 = streamPositions[(i - 1) * 3 + 2];
-        const x1 = streamPositions[i * 3 + 0];
-        const y1 = streamPositions[i * 3 + 1];
-        const z1 = streamPositions[i * 3 + 2];
-        const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
-        const len = Math.hypot(dx, dy, dz);
-        if (len < 1e-6) continue;
-        const t = i / (count - 1);
-        // Arrows a touch brighter than the line so they read against bloom.
-        tmp.setHSL(t * 0.7, 1.0, 0.65);
-        arrowList.push({
-          px: (x0 + x1) * 0.5,
-          py: (y0 + y1) * 0.5,
-          pz: (z0 + z1) * 0.5,
-          dx: dx / len, dy: dy / len, dz: dz / len,
-          r: tmp.r, g: tmp.g, b: tmp.b,
-        });
+    const at = (i: number): [number, number, number] => [
+      streamPositions[i * 3 + 0],
+      streamPositions[i * 3 + 1],
+      streamPositions[i * 3 + 2],
+    ];
+    const startPos = count > 0 ? at(0) : [0, 0, 0] as [number, number, number];
+    const endPos = count > 0 ? at(count - 1) : [0, 0, 0] as [number, number, number];
+
+    // Output-boundary ticks from the multi-board bake layout. Each output
+    // owns a contiguous slice of the global stream; its first LED's
+    // physical position is where that output's chain begins.
+    const ticks: Tick[] = [];
+    const boards = output.exportBoards ?? [];
+    for (const b of boards) {
+      for (const o of b.outputs) {
+        const globalStart = b.ledStart + o.ledStart;
+        if (globalStart <= 0 || globalStart >= count) continue; // 0 == START already
+        const label = o.label ? `${o.label} · ${globalStart}` : `· ${globalStart}`;
+        ticks.push({ pos: at(globalStart), label });
       }
     }
 
-    const startPos: [number, number, number] = count > 0
-      ? [streamPositions[0], streamPositions[1], streamPositions[2]]
-      : [0, 0, 0];
-    const endPos: [number, number, number] = count > 0
-      ? [
-          streamPositions[(count - 1) * 3 + 0],
-          streamPositions[(count - 1) * 3 + 1],
-          streamPositions[(count - 1) * 3 + 2],
-        ]
-      : [0, 0, 0];
-
-    return { positions: streamPositions, colors: c, arrows: arrowList, startPos, endPos };
-  }, [cube, wiring]);
+    return { positions: streamPositions, colors: c, startPos, endPos, count, ticks };
+  }, [cube, wiring, output.exportBoards]);
 
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
@@ -99,111 +99,126 @@ export function WiringPathOverlay() {
     return g;
   }, [positions, colors]);
 
-  // Cone tip is at +Z. For a regular Object3D (not a camera),
-  // lookAt(target) orients the local +Z axis toward the target — the
-  // opposite of the camera convention. ConeGeometry's default tip is
-  // at +Y, so rotate +90° around X: that takes +Y → +Z.
-  const arrowSize = spacing(cube) * ARROW_SIZE_RATIO;
-  const arrowGeometry = useMemo(() => {
-    const g = new THREE.ConeGeometry(arrowSize * 0.5, arrowSize, 10);
-    g.rotateX(Math.PI / 2);
-    return g;
-  }, [arrowSize]);
+  const pitch = spacing(cube);
+  const cometGeometry = useMemo(() => new THREE.SphereGeometry(1, 12, 12), []);
+  const cometRef = useRef<THREE.InstancedMesh>(null);
+  const head = useRef(0);
+  // Scratch objects reused each frame (no per-frame allocation).
+  const scratch = useMemo(
+    () => ({ dummy: new THREE.Object3D(), col: new THREE.Color() }),
+    [],
+  );
 
-  const instancedRef = useRef<THREE.InstancedMesh>(null);
+  // The comet: a bright white head with a fading tail that crawls along
+  // the stream path in data-flow order, looping start → end. This is the
+  // primary "which way" cue — no need to decode the gradient.
+  useFrame((_, dt) => {
+    const mesh = cometRef.current;
+    if (!mesh || count < 2) return;
+    const { dummy, col } = scratch;
+    const speed = count / COMET_SECONDS; // LEDs per second
+    head.current = (head.current + dt * speed) % count;
+    const h = head.current;
+    const headSize = pitch * 0.75;
 
-  // Re-run when `show` flips so the freshly-mounted InstancedMesh gets
-  // its per-instance matrices and colors set. Without `show` in the
-  // deps, the effect would have run once when the mesh wasn't mounted
-  // and never again until `arrows` changed.
-  useEffect(() => {
-    const mesh = instancedRef.current;
-    if (!mesh) return;
-    const dummy = new THREE.Object3D();
-    const target = new THREE.Vector3();
-    const tmpColor = new THREE.Color();
-    for (let i = 0; i < arrows.length; i++) {
-      const a = arrows[i];
-      dummy.position.set(a.px, a.py, a.pz);
-      target.set(a.px + a.dx, a.py + a.dy, a.pz + a.dz);
-      dummy.lookAt(target);
+    for (let k = 0; k < COMET_LEN; k++) {
+      const idx = Math.floor(h) - k;
+      if (idx < 0) {
+        // Tail would run past the start — park this segment invisibly
+        // rather than wrap it round from the END (which would mislead).
+        dummy.position.set(0, 0, 0);
+        dummy.scale.setScalar(0);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(k, dummy.matrix);
+        continue;
+      }
+      const taper = 1 - k / COMET_LEN;        // 1 at head → ~0 at tail
+      dummy.position.set(
+        positions[idx * 3 + 0],
+        positions[idx * 3 + 1],
+        positions[idx * 3 + 2],
+      );
+      dummy.scale.setScalar(headSize * (0.35 + 0.65 * taper));
       dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-      tmpColor.setRGB(a.r, a.g, a.b);
-      mesh.setColorAt(i, tmpColor);
-    }
-    // Hide unused instances with a zero-scale matrix.
-    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
-    for (let i = arrows.length; i < mesh.count; i++) {
-      mesh.setMatrixAt(i, zero);
+      mesh.setMatrixAt(k, dummy.matrix);
+      // White-hot head (blooms) fading to dark down the tail.
+      const b = 0.15 + taper * taper * 1.1;
+      col.setRGB(b, b, b);
+      mesh.setColorAt(k, col);
     }
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [arrows, show]);
+  });
 
   if (!show) return null;
 
-  // InstancedMesh count is fixed (cap + slack) so the mesh isn't
-  // recreated when arrow count fluctuates by one or two across re-memos.
-  const instancedCount = TARGET_ARROW_COUNT + 8;
-  const startRadius = spacing(cube) * START_MARKER_RATIO;
-  const endRadius = spacing(cube) * END_MARKER_RATIO;
+  const startRadius = pitch * START_MARKER_RATIO;
+  const endRadius = pitch * END_MARKER_RATIO;
+  const tickRadius = pitch * TICK_MARKER_RATIO;
 
-  // R3F's `<line>` intrinsic targets THREE.Line, but TS resolves <line>
-  // against the DOM SVGLineElement type first. Bypass via cast — R3F
-  // still constructs the right object at runtime.
+  // R3F's `<line>` intrinsic resolves to the DOM SVGLineElement type in TS;
+  // cast so we get THREE.Line. R3F builds the right object at runtime.
   const ThreeLine = 'line' as unknown as React.ElementType;
 
   return (
     <group>
+      {/* Faint full-route gradient line. */}
       <ThreeLine geometry={geometry}>
         <lineBasicMaterial
           vertexColors
           transparent
-          opacity={0.75}
+          opacity={0.45}
           toneMapped={false}
           depthTest={false}
         />
       </ThreeLine>
-      {/* Arrows. NO `vertexColors` on the material — InstancedMesh's
-          per-instance color attribute is what we want, and setting
-          vertexColors makes three look at the geometry's color attribute
-          instead (which we never write). */}
+
+      {/* Flow comet — bright head + fading tail, no per-instance vertex
+          colors (InstancedMesh instanceColor is what we drive). */}
       <instancedMesh
-        ref={instancedRef}
-        args={[arrowGeometry, undefined, instancedCount]}
+        ref={cometRef}
+        args={[cometGeometry, undefined, COMET_LEN]}
         frustumCulled={false}
       >
-        <meshBasicMaterial
-          toneMapped={false}
-          transparent
-          opacity={0.95}
-          depthTest={false}
-        />
+        <meshBasicMaterial toneMapped={false} transparent depthTest={false} />
       </instancedMesh>
-      {/* START marker — bright white-yellow sphere, ~LED-sized × 0.85 in
-          radius. Bloom picks it up hard so it's unmistakable. */}
+
+      {/* START — green, labeled. */}
       <mesh position={startPos}>
         <sphereGeometry args={[startRadius, 20, 20]} />
-        <meshBasicMaterial
-          color="#fff5b0"
-          toneMapped={false}
-          transparent
-          opacity={0.95}
-          depthTest={false}
-        />
+        <meshBasicMaterial color="#28ff5a" toneMapped={false} transparent opacity={0.95} depthTest={false} />
       </mesh>
-      {/* END marker — smaller, dim purple. Unambiguously the other end. */}
+      <Html position={startPos} center zIndexRange={[100, 0]}>
+        <div style={{ ...labelBase, background: '#0a7a2a', border: '1px solid #28ff5a' }}>
+          ▶ START · 0
+        </div>
+      </Html>
+
+      {/* END — red, labeled. */}
       <mesh position={endPos}>
-        <sphereGeometry args={[endRadius, 14, 14]} />
-        <meshBasicMaterial
-          color="#3030a0"
-          toneMapped={false}
-          transparent
-          opacity={0.9}
-          depthTest={false}
-        />
+        <sphereGeometry args={[endRadius, 18, 18]} />
+        <meshBasicMaterial color="#ff2a2a" toneMapped={false} transparent opacity={0.95} depthTest={false} />
       </mesh>
+      <Html position={endPos} center zIndexRange={[100, 0]}>
+        <div style={{ ...labelBase, background: '#8a1010', border: '1px solid #ff5a5a' }}>
+          ■ END · {Math.max(0, count - 1)}
+        </div>
+      </Html>
+
+      {/* Output-boundary ticks — cyan dot + label at each output's first LED. */}
+      {ticks.map((t, i) => (
+        <group key={i}>
+          <mesh position={t.pos}>
+            <sphereGeometry args={[tickRadius, 12, 12]} />
+            <meshBasicMaterial color="#30d0ff" toneMapped={false} transparent opacity={0.9} depthTest={false} />
+          </mesh>
+          <Html position={t.pos} center zIndexRange={[90, 0]}>
+            <div style={{ ...labelBase, fontSize: 10, background: '#0a4a66', border: '1px solid #30d0ff' }}>
+              {t.label}
+            </div>
+          </Html>
+        </group>
+      ))}
     </group>
   );
 }
