@@ -41,6 +41,8 @@ const int SD_CS_PIN = 16, SD_SCK_PIN = 14, SD_MISO_PIN = 36, SD_MOSI_PIN = 15;
 
 const int MAX_LEDS_PER_OUT = 600;
 const int MAX_OUTPUTS      = 8;
+const uint32_t MAXVOX = (uint32_t)MAX_LEDS_PER_OUT * MAX_OUTPUTS;  // gLeds capacity
+const int MAX_DIM = 32;   // largest cube dimension we accept (bounds RAM + flashY[])
 
 // cube.bin format constants (must match sdCardExport.ts CUBE_*).
 const uint32_t CUBE_MAGIC = 0x42554356; // 'VCUB' little-endian
@@ -108,7 +110,7 @@ static inline void addVoxel(int x, int y, int z, int r, int g, int b) {
   uint32_t L = ((uint32_t)x * gNy + y) * gNz + z;
   if (L >= gVoxelCount) return;
   uint16_t led = gVoxelMap[L];
-  if (led == CUBE_NO_LED || led >= gTotalLeds) return;
+  if (led == CUBE_NO_LED || led >= gTotalLeds || led >= MAXVOX) return;
   CRGB& c = gLeds[led];
   int nr = c.r + r, ng = c.g + g, nb = c.b + b;
   c.r = nr > 255 ? 255 : nr;
@@ -361,14 +363,16 @@ static void tetCollapse(int y) {
 
 void tetrisInit() {
   if (gTet.allocVox != gVoxelCount) {
-    if (gTet.stack) free(gTet.stack);
-    if (gTet.col) free(gTet.col);
-    gTet.stack = (uint8_t*)malloc(gVoxelCount);
-    gTet.col   = (uint8_t*)malloc(gVoxelCount * 3);
-    gTet.allocVox = gVoxelCount;
+    if (gTet.stack) { free(gTet.stack); gTet.stack = nullptr; }
+    if (gTet.col)   { free(gTet.col);   gTet.col = nullptr; }
+    gTet.allocVox = 0;
+    uint8_t* s = (uint8_t*)malloc(gVoxelCount);
+    uint8_t* c = (uint8_t*)malloc(gVoxelCount * 3);
+    if (!s || !c) { if (s) free(s); if (c) free(c); Serial.println("Tetris: out of memory"); return; }
+    gTet.stack = s; gTet.col = c; gTet.allocVox = gVoxelCount;  // commit only on full success
   }
-  if (gTet.stack) memset(gTet.stack, 0, gVoxelCount);
-  if (gTet.col)   memset(gTet.col, 0, gVoxelCount * 3);
+  memset(gTet.stack, 0, gVoxelCount);
+  memset(gTet.col, 0, gVoxelCount * 3);
   gTet.dropAcc = 0; gTet.clearPulse = 0; gTet.score = 0; gTet.flashN = 0;
   bool over; tetSpawn(over);
 }
@@ -499,6 +503,21 @@ bool loadBoardConfig() {
     gOutputs[gOutputCount].ledCount = o["ledCount"].as<uint32_t>();
     gOutputCount++;
   }
+  // Bound everything against the fixed gLeds[MAXVOX] buffer — a corrupt or
+  // hand-edited config must never make addLeds()/clearLeds()/addVoxel() write
+  // out of bounds. Reject (halt) rather than trust the file.
+  if (gTotalLeds == 0 || gTotalLeds > MAXVOX) {
+    Serial.printf("config: totalLeds %u out of range (1..%u)\n", (unsigned)gTotalLeds, (unsigned)MAXVOX);
+    return false;
+  }
+  for (int i = 0; i < gOutputCount; i++) {
+    uint32_t end = gOutputs[i].ledStart + gOutputs[i].ledCount;
+    if (end > MAXVOX) {
+      Serial.printf("config: output %d range %u..%u exceeds buffer %u\n",
+                    i, (unsigned)gOutputs[i].ledStart, (unsigned)end, (unsigned)MAXVOX);
+      return false;
+    }
+  }
   return true;
 }
 
@@ -511,7 +530,20 @@ bool loadCubeMap() {
   if (magic != CUBE_MAGIC || h[4] != CUBE_VERSION) { Serial.println("cube.bin bad magic/version"); f.close(); return false; }
   gNx = h[6] | (h[7]<<8); gNy = h[8] | (h[9]<<8); gNz = h[10] | (h[11]<<8);
   gVoxelCount = (uint32_t)h[12] | ((uint32_t)h[13]<<8) | ((uint32_t)h[14]<<16) | ((uint32_t)h[15]<<24);
-  if (gVoxelCount == 0 || gVoxelCount > 200000) { f.close(); return false; }
+  // Validate hard: sane dims (bounds RAM + the flashY[] array), and that the
+  // voxel count EXACTLY equals Nx*Ny*Nz (64-bit). The Tetris stack is indexed
+  // by Nx*Ny*Nz but sized to gVoxelCount — a mismatch is a heap OOB, so reject.
+  if (gNx == 0 || gNy == 0 || gNz == 0 || gNx > MAX_DIM || gNy > MAX_DIM || gNz > MAX_DIM) {
+    Serial.printf("cube.bin: bad dims %ux%ux%u\n", gNx, gNy, gNz); f.close(); return false;
+  }
+  // Stack is indexed by Nx*Ny*Nz but sized to gVoxelCount — they MUST match.
+  // (MAX_DIM already bounds the product to <= 32768, which is RAM-safe.)
+  uint64_t expect = (uint64_t)gNx * gNy * gNz;
+  if (expect != gVoxelCount) {
+    Serial.printf("cube.bin: voxelCount %u != Nx*Ny*Nz %llu\n",
+                  (unsigned)gVoxelCount, (unsigned long long)expect);
+    f.close(); return false;
+  }
   gVoxelMap = (uint16_t*)malloc(gVoxelCount * sizeof(uint16_t));
   if (!gVoxelMap) { Serial.println("cube.bin: out of memory"); f.close(); return false; }
   size_t want = gVoxelCount * 2;
@@ -544,36 +576,52 @@ void connectWifi() {
 // ---------------------------------------------------------------------------
 void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
                AwsEventType type, void* arg, uint8_t* data, size_t len) {
+  // Fully reset a player slot's input (so stale held/latched actions never
+  // leak across reconnects into the next player).
+  auto resetSlot = [](int i){
+    PlayerInput& pi = gPlayers[i];
+    pi.connected = false; pi.padX = 0.5f; pi.padY = 0.5f;
+    pi.aLeft=pi.aRight=pi.aFwd=pi.aBack=pi.aRot=pi.aDrop=false; pi.softDrop=false;
+  };
+
   if (type == WS_EVT_CONNECT) {
     int slot = -1;
     lockIn();
     if (gSlotClient[0] == 0)      { slot = 0; }
     else if (gSlotClient[1] == 0) { slot = 1; }
-    if (slot >= 0) {
-      gSlotClient[slot] = client->id();
-      gPlayers[slot].connected = true;
-      gPlayers[slot].padX = 0.5f; gPlayers[slot].padY = 0.5f;
-    }
+    if (slot >= 0) { gSlotClient[slot] = client->id(); resetSlot(slot); gPlayers[slot].connected = true; }
     unlockIn();
     client->printf("{\"player\":%d}", slot);
     return;
   }
   if (type == WS_EVT_DISCONNECT) {
     lockIn();
-    for (int i = 0; i < 2; i++) {
-      if (gSlotClient[i] == client->id()) { gSlotClient[i] = 0; gPlayers[i].connected = false; }
-    }
+    for (int i = 0; i < 2; i++)
+      if (gSlotClient[i] == client->id()) { gSlotClient[i] = 0; resetSlot(i); }
     unlockIn();
     return;
   }
   if (type != WS_EVT_DATA) return;
+
+  // AsyncWebSocket can split a message across DATA events. Only handle a
+  // single, complete, final TEXT frame — ignore fragmented / continuation /
+  // binary / empty / oversized frames (our control messages are tiny).
+  AwsFrameInfo* info = (AwsFrameInfo*)arg;
+  if (!info->final || info->index != 0 || info->len != len) return;
+  if (info->opcode != WS_TEXT) return;
+  if (len == 0 || len > 200) return;
+
   DynamicJsonDocument doc(256);
   if (deserializeJson(doc, data, len)) return;
-  const char* t = doc["t"] | "";
-  int player = doc["p"] | 0;
-  if (player < 0 || player > 1) return;
 
+  // Trust the SENDER's owned slot, not a self-reported index — a client can't
+  // drive the other player's paddle, and spectators (no slot) are ignored.
+  int player = -1;
   lockIn();
+  if      (gSlotClient[0] == client->id()) player = 0;
+  else if (gSlotClient[1] == client->id()) player = 1;
+  if (player < 0) { unlockIn(); return; }
+  const char* t = doc["t"] | "";
   if (strcmp(t, "game") == 0) {
     const char* g = doc["g"] | "menu";
     if (strcmp(g, "pong") == 0) gGame = GAME_PONG;
@@ -593,7 +641,7 @@ void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client,
     else if (!strcmp(a,"back")) pi.aBack = true;
     else if (!strcmp(a,"rot")) pi.aRot = true;
     else if (!strcmp(a,"drop")) pi.aDrop = true;
-    else if (!strcmp(a,"soft")) pi.softDrop = (bool)(doc["v"] | true);
+    else if (!strcmp(a,"soft")) pi.softDrop = (bool)(doc["v"] | false);
   }
   unlockIn();
 }
@@ -733,9 +781,12 @@ void loop() {
 
   gWs.cleanupClients();
 
-  int game = gGame;
-  if (gGameDirty) {
-    gGameDirty = false;
+  // Read the selection + dirty flag together under the lock so the WS task
+  // can't slip a game switch between the read and the init-clear (which would
+  // drop the (re)init and run a game over uninitialized state).
+  int game; bool dirty;
+  lockIn(); game = gGame; dirty = gGameDirty; gGameDirty = false; unlockIn();
+  if (dirty) {
     if (game == GAME_PONG) pongInit();
     else if (game == GAME_TETRIS) tetrisInit();
   }
