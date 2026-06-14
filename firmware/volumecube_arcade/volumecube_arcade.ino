@@ -249,16 +249,218 @@ void pongRender() {
 }
 
 // ---------------------------------------------------------------------------
-//  TETRIS (ported + made playable) — filled in milestone 2
+//  TETRIS — playable (you vs gravity). Pieces fall down Y; full XZ layers
+//  clear. Ported piece data + collision from tetris3d.js; random placement
+//  replaced with player control + game-over.
 // ---------------------------------------------------------------------------
-void tetrisInit() { /* milestone 2 */ }
-void tetrisUpdate(float dt) { (void)dt; /* milestone 2 */ }
+struct TetRot { int8_t b[4][3]; };
+struct TetPiece { uint8_t color[3]; uint8_t numRots; TetRot rots[3]; };
+
+const TetPiece TET_PIECES[6] = {
+  // I
+  {{90,200,255}, 3, {{{{0,0,0},{1,0,0},{2,0,0},{3,0,0}}},
+                     {{{0,0,0},{0,0,1},{0,0,2},{0,0,3}}},
+                     {{{0,0,0},{0,1,0},{0,2,0},{0,3,0}}}}},
+  // O (2 rots; pad 3rd unused)
+  {{255,225,60}, 2, {{{{0,0,0},{1,0,0},{0,0,1},{1,0,1}}},
+                     {{{0,0,0},{0,1,0},{1,0,0},{1,1,0}}},
+                     {{{0,0,0},{1,0,0},{0,0,1},{1,0,1}}}}},
+  // T
+  {{200,90,255}, 3, {{{{0,0,0},{1,0,0},{2,0,0},{1,0,1}}},
+                     {{{0,0,0},{0,0,1},{0,0,2},{1,0,1}}},
+                     {{{0,0,0},{1,0,0},{2,0,0},{1,1,0}}}}},
+  // L
+  {{255,140,30}, 3, {{{{0,0,0},{1,0,0},{2,0,0},{0,0,1}}},
+                     {{{0,0,0},{0,0,1},{0,0,2},{1,0,0}}},
+                     {{{0,0,0},{0,1,0},{0,2,0},{1,0,0}}}}},
+  // S
+  {{60,230,120}, 2, {{{{0,0,0},{1,0,0},{1,0,1},{2,0,1}}},
+                     {{{0,0,1},{0,0,0},{1,1,0},{1,1,1}}},
+                     {{{0,0,0},{1,0,0},{1,0,1},{2,0,1}}}}},
+  // Tripod (3D-only)
+  {{255,70,150}, 3, {{{{0,0,0},{1,0,0},{0,1,0},{0,0,1}}},
+                     {{{0,0,0},{1,0,0},{0,0,1},{1,1,0}}},
+                     {{{0,0,0},{0,1,0},{0,0,1},{1,1,1}}}}},
+};
+
+const float TET_FALL = 2.2f;   // base fall steps/sec
+const float TET_SOFT = 16.0f;  // soft-drop steps/sec (held)
+const float TET_FLASHDUR = 0.18f;
+
+struct TetState {
+  uint8_t* stack = nullptr;
+  uint8_t* col = nullptr;      // ×3
+  uint32_t allocVox = 0;
+  int pieceIdx, rotIdx, px, py, pz;
+  bool hasPiece;
+  float dropAcc;
+  float clearPulse;
+  int   score;
+  int   flashY[64]; float flashT[64]; int flashN;
+} gTet;
+
+static inline int tetIdx(int x, int y, int z) { return (x * gNy + y) * gNz + z; }
+
+static void tetFootprint(int pi, int ri, int& mx, int& my, int& mz) {
+  mx = my = mz = 0;
+  for (int k=0;k<4;k++){ const int8_t* b = TET_PIECES[pi].rots[ri].b[k];
+    if (b[0]>mx) mx=b[0]; if (b[1]>my) my=b[1]; if (b[2]>mz) mz=b[2]; }
+}
+
+static bool tetCollides(int ri, int px, int py, int pz) {
+  for (int k=0;k<4;k++){ const int8_t* b = TET_PIECES[gTet.pieceIdx].rots[ri].b[k];
+    int x=px+b[0], y=py+b[1], z=pz+b[2];
+    if (x<0||x>=gNx||z<0||z>=gNz||y<0||y>=gNy) return true;
+    if (gTet.stack[tetIdx(x,y,z)]) return true;
+  }
+  return false;
+}
+
+static void tetSpawn(bool& gameOver) {
+  gTet.pieceIdx = random(0, 6);
+  gTet.rotIdx = random(0, TET_PIECES[gTet.pieceIdx].numRots);
+  int mx,my,mz; tetFootprint(gTet.pieceIdx, gTet.rotIdx, mx,my,mz);
+  gTet.px = (gNx - 1 - mx) / 2; if (gTet.px < 0) gTet.px = 0;
+  gTet.pz = (gNz - 1 - mz) / 2; if (gTet.pz < 0) gTet.pz = 0;
+  gTet.py = gNy - 1 - my;        // top
+  gTet.hasPiece = true;
+  gameOver = tetCollides(gTet.rotIdx, gTet.px, gTet.py, gTet.pz);
+}
+
+static void tetLock() {
+  const uint8_t* c = TET_PIECES[gTet.pieceIdx].color;
+  for (int k=0;k<4;k++){ const int8_t* b = TET_PIECES[gTet.pieceIdx].rots[gTet.rotIdx].b[k];
+    int x=gTet.px+b[0], y=gTet.py+b[1], z=gTet.pz+b[2];
+    if (x<0||x>=gNx||y<0||y>=gNy||z<0||z>=gNz) continue;
+    int id = tetIdx(x,y,z);
+    gTet.stack[id] = 1;
+    gTet.col[id*3+0]=c[0]; gTet.col[id*3+1]=c[1]; gTet.col[id*3+2]=c[2];
+  }
+  // Queue any newly-full XZ layers for a flash-then-collapse.
+  for (int y=0;y<gNy;y++){
+    bool full=true;
+    for (int x=0;x<gNx && full;x++) for (int z=0;z<gNz && full;z++)
+      if (!gTet.stack[tetIdx(x,y,z)]) full=false;
+    if (full){ bool already=false; for(int i=0;i<gTet.flashN;i++) if(gTet.flashY[i]==y) already=true;
+      if(!already && gTet.flashN<64){ gTet.flashY[gTet.flashN]=y; gTet.flashT[gTet.flashN]=1.0f; gTet.flashN++; } }
+  }
+}
+
+static void tetCollapse(int y) {
+  for (int yy=y; yy<gNy-1; yy++) for (int x=0;x<gNx;x++) for (int z=0;z<gNz;z++){
+    int src=tetIdx(x,yy+1,z), dst=tetIdx(x,yy,z);
+    gTet.stack[dst]=gTet.stack[src];
+    gTet.col[dst*3+0]=gTet.col[src*3+0]; gTet.col[dst*3+1]=gTet.col[src*3+1]; gTet.col[dst*3+2]=gTet.col[src*3+2];
+  }
+  for (int x=0;x<gNx;x++) for (int z=0;z<gNz;z++){
+    int id=tetIdx(x,gNy-1,z); gTet.stack[id]=0; gTet.col[id*3+0]=gTet.col[id*3+1]=gTet.col[id*3+2]=0;
+  }
+  gTet.clearPulse = 1;
+  gTet.score++;
+}
+
+void tetrisInit() {
+  if (gTet.allocVox != gVoxelCount) {
+    if (gTet.stack) free(gTet.stack);
+    if (gTet.col) free(gTet.col);
+    gTet.stack = (uint8_t*)malloc(gVoxelCount);
+    gTet.col   = (uint8_t*)malloc(gVoxelCount * 3);
+    gTet.allocVox = gVoxelCount;
+  }
+  if (gTet.stack) memset(gTet.stack, 0, gVoxelCount);
+  if (gTet.col)   memset(gTet.col, 0, gVoxelCount * 3);
+  gTet.dropAcc = 0; gTet.clearPulse = 0; gTet.score = 0; gTet.flashN = 0;
+  bool over; tetSpawn(over);
+}
+
+void tetrisUpdate(float dt) {
+  if (!gTet.stack) return;
+  if (dt > 0.05f) dt = 0.05f;
+  if (gTet.clearPulse > 0) { gTet.clearPulse -= dt*3.2f; if (gTet.clearPulse<0) gTet.clearPulse=0; }
+
+  // Resolve flashes → collapse.
+  for (int i=gTet.flashN-1;i>=0;i--){
+    gTet.flashT[i] -= dt / TET_FLASHDUR;
+    if (gTet.flashT[i] <= 0){ int y=gTet.flashY[i];
+      tetCollapse(y);
+      gTet.flashY[i]=gTet.flashY[gTet.flashN-1]; gTet.flashT[i]=gTet.flashT[gTet.flashN-1]; gTet.flashN--;
+      for (int j=0;j<gTet.flashN;j++) if (gTet.flashY[j]>y) gTet.flashY[j]--;
+    }
+  }
+
+  // Snapshot + clear one-shot player actions (player 0 drives Tetris).
+  bool aL,aR,aF,aB,aRot,aDrop,soft;
+  lockIn();
+  PlayerInput& pi = gPlayers[0];
+  aL=pi.aLeft; aR=pi.aRight; aF=pi.aFwd; aB=pi.aBack; aRot=pi.aRot; aDrop=pi.aDrop; soft=pi.softDrop;
+  pi.aLeft=pi.aRight=pi.aFwd=pi.aBack=pi.aRot=pi.aDrop=false;
+  unlockIn();
+
+  if (!gTet.hasPiece) return;
+
+  if (aL && !tetCollides(gTet.rotIdx, gTet.px-1, gTet.py, gTet.pz)) gTet.px--;
+  if (aR && !tetCollides(gTet.rotIdx, gTet.px+1, gTet.py, gTet.pz)) gTet.px++;
+  if (aF && !tetCollides(gTet.rotIdx, gTet.px, gTet.py, gTet.pz+1)) gTet.pz++;
+  if (aB && !tetCollides(gTet.rotIdx, gTet.px, gTet.py, gTet.pz-1)) gTet.pz--;
+  if (aRot) { int nr=(gTet.rotIdx+1)%TET_PIECES[gTet.pieceIdx].numRots;
+    if (!tetCollides(nr, gTet.px, gTet.py, gTet.pz)) gTet.rotIdx=nr; }
+
+  bool gameOver = false;
+  if (aDrop) {
+    while (!tetCollides(gTet.rotIdx, gTet.px, gTet.py-1, gTet.pz)) gTet.py--;
+    tetLock(); gTet.hasPiece=false; tetSpawn(gameOver);
+  } else {
+    gTet.dropAcc += (soft ? TET_SOFT : TET_FALL) * dt;
+    int steps=0;
+    while (gTet.dropAcc >= 1 && steps < 64) {
+      gTet.dropAcc -= 1; steps++;
+      if (tetCollides(gTet.rotIdx, gTet.px, gTet.py-1, gTet.pz)) {
+        tetLock(); gTet.hasPiece=false; tetSpawn(gameOver); break;
+      }
+      gTet.py--;
+    }
+  }
+  if (gameOver) {
+    // Board full → brief celebratory wash, then restart.
+    gTet.clearPulse = 1;
+    tetrisInit();
+  }
+}
+
 void tetrisRender() {
   clearLeds();
-  // Placeholder "coming soon": a gentle pulse so the mode isn't black.
-  static float t = 0; t += 0.03f;
-  int v = (int)(40 + 30*sinf(t));
-  for (int x=0;x<gNx;x++) for (int z=0;z<gNz;z++) addVoxel(x,0,z, v, v/2, 0);
+  if (!gTet.stack) return;
+  // Locked stack.
+  for (int x=0;x<gNx;x++) for (int y=0;y<gNy;y++) for (int z=0;z<gNz;z++){
+    int id=tetIdx(x,y,z); if (!gTet.stack[id]) continue;
+    addVoxel(x,y,z, gTet.col[id*3+0]*4/5, gTet.col[id*3+1]*4/5, gTet.col[id*3+2]*4/5);
+  }
+  // Landing ghost (dim) + active piece (bright core + bloom).
+  if (gTet.hasPiece) {
+    const uint8_t* c = TET_PIECES[gTet.pieceIdx].color;
+    int gy = gTet.py;
+    while (gy>0 && !tetCollides(gTet.rotIdx, gTet.px, gy-1, gTet.pz)) gy--;
+    for (int k=0;k<4;k++){ const int8_t* b=TET_PIECES[gTet.pieceIdx].rots[gTet.rotIdx].b[k];
+      int gx=gTet.px+b[0], gyy=gy+b[1], gz=gTet.pz+b[2];
+      if (gyy < gTet.py + b[1]) addVoxel(gx,gyy,gz, c[0]/6, c[1]/6, c[2]/6);
+    }
+    for (int k=0;k<4;k++){ const int8_t* b=TET_PIECES[gTet.pieceIdx].rots[gTet.rotIdx].b[k];
+      int x=gTet.px+b[0], y=gTet.py+b[1], z=gTet.pz+b[2];
+      addVoxel(x,y,z, c[0], c[1], c[2]);
+      addVoxel(x+1,y,z, c[0]/4,c[1]/4,c[2]/4); addVoxel(x-1,y,z, c[0]/4,c[1]/4,c[2]/4);
+      addVoxel(x,y+1,z, c[0]/4,c[1]/4,c[2]/4); addVoxel(x,y-1,z, c[0]/4,c[1]/4,c[2]/4);
+      addVoxel(x,y,z+1, c[0]/4,c[1]/4,c[2]/4); addVoxel(x,y,z-1, c[0]/4,c[1]/4,c[2]/4);
+    }
+  }
+  // Layer-clear flashes (white-hot).
+  for (int i=0;i<gTet.flashN;i++){ float k=gTet.flashT[i]; if(k<0)k=0; if(k>1)k=1;
+    int v=(int)(90 + 165*k*k);
+    for (int x=0;x<gNx;x++) for (int z=0;z<gNz;z++) addVoxel(x,gTet.flashY[i],z, v,v,v);
+  }
+  // Volume wash on a clear.
+  if (gTet.clearPulse>0){ int add=(int)(60*gTet.clearPulse);
+    for (int x=0;x<gNx;x++) for (int y=0;y<gNy;y++) for (int z=0;z<gNz;z++) addVoxel(x,y,z, add, add*9/10, add*4/5);
+  }
 }
 
 // ---------------------------------------------------------------------------
