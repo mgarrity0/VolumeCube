@@ -1,0 +1,174 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>VolumeCube Arcade — desktop preview</title>
+<!--
+  Standalone preview of the arcade firmware's games, playable in any browser
+  with NO flashing. Mirrors volumecube_arcade.ino's Pong + Tetris logic and
+  constants 1:1, so the FEEL you tune here (ball speed, paddle size, AI skill,
+  Tetris fall rate) transfers straight to the firmware — change the CONST
+  block below, find what plays well, and I'll copy the values into the .ino.
+
+  It is NOT pixel-identical to the LEDs (your screen isn't a glowing cube) —
+  it renders the 10x10x10 voxels as a depth-sorted isometric dot field. The
+  gameplay is what matters here.
+-->
+<style>
+  body{margin:0;background:#07070d;color:#cdd;font-family:system-ui,sans-serif;
+       display:flex;flex-direction:column;align-items:center;height:100vh;overflow:hidden}
+  h1{font-size:1em;opacity:.6;margin:.4em}
+  canvas{background:#000;border-radius:10px;box-shadow:0 0 40px #1a1a3a inset}
+  #hud{font-size:.85em;opacity:.8;margin:.5em;text-align:center;line-height:1.5}
+  b{color:#7af}
+  .key{background:#1a1a2e;border:1px solid #335;border-radius:4px;padding:1px 6px;font-family:monospace}
+</style></head><body>
+<h1>VolumeCube Arcade — desktop preview</h1>
+<canvas id="c" width="560" height="560"></canvas>
+<div id="hud"></div>
+<script>
+// ===== Tunables — mirror volumecube_arcade.ino. Edit + reload to feel changes. =====
+const N = 10;                 // cube is N×N×N
+const PONG_SPEED = 9.0, PONG_PSIZE = 2, PONG_AISKILL = 0.75;
+const TET_FALL = 2.2, TET_SOFT = 16.0, TET_FLASHDUR = 0.18;
+
+const Nx=N, Ny=N, Nz=N;
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const hud = document.getElementById('hud');
+
+// ---- voxel buffer + isometric render (depth-sorted glowing dots) ----
+const leds = new Float32Array(Nx*Ny*Nz*3);
+function vidx(x,y,z){ return ((x*Ny+y)*Nz+z); }
+function clearV(){ leds.fill(0); }
+function addV(x,y,z,r,gg,b){ if(x<0||x>=Nx||y<0||y>=Ny||z<0||z>=Nz)return;
+  const i=vidx(x,y,z)*3; leds[i]=Math.min(255,leds[i]+r); leds[i+1]=Math.min(255,leds[i+1]+gg); leds[i+2]=Math.min(255,leds[i+2]+b); }
+function glow(cx,cy,cz,rad,r,gg,b,br){ if(rad<=0)return;
+  for(let x=Math.max(0,Math.floor(cx-rad));x<=Math.min(Nx-1,Math.ceil(cx+rad));x++)
+  for(let y=Math.max(0,Math.floor(cy-rad));y<=Math.min(Ny-1,Math.ceil(cy+rad));y++)
+  for(let z=Math.max(0,Math.floor(cz-rad));z<=Math.min(Nz-1,Math.ceil(cz+rad));z++){
+    const dx=x-cx,dy=y-cy,dz=z-cz,d=Math.sqrt(dx*dx+dy*dy+dz*dz)/rad; if(d>=1)continue;
+    const f=(1-d)*(1-d)*br; addV(x,y,z,r*f,gg*f,b*f);} }
+
+const A=22, B=12, C=26;  // iso projection scale
+function render(){
+  g.fillStyle='#000'; g.fillRect(0,0,cv.width,cv.height);
+  g.globalCompositeOperation='lighter';
+  const cells=[];
+  for(let x=0;x<Nx;x++)for(let y=0;y<Ny;y++)for(let z=0;z<Nz;z++){
+    const i=vidx(x,y,z)*3, r=leds[i],gg=leds[i+1],b=leds[i+2];
+    if(r+gg+b<8)continue;
+    const sx=cv.width/2 + (x - z)*A;
+    const sy=cv.height/2 + (x + z)*B - (y-(Ny-1)/2)*C + 60;
+    cells.push({sx,sy,d:x+z-y,r,gg,b});
+  }
+  cells.sort((p,q)=>p.d-q.d);
+  for(const c of cells){
+    const rad=7;
+    const grd=g.createRadialGradient(c.sx,c.sy,0,c.sx,c.sy,rad);
+    grd.addColorStop(0,`rgb(${c.r|0},${c.gg|0},${c.b|0})`);
+    grd.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=grd; g.beginPath(); g.arc(c.sx,c.sy,rad,0,7); g.fill();
+  }
+  g.globalCompositeOperation='source-over';
+}
+
+// ---- input ----
+const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true; tetKey(e.key.toLowerCase()); e.preventDefault();});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+let mouse={x:0.5,y:0.5};
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect();
+  mouse.x=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  mouse.y=Math.max(0,Math.min(1,1-(e.clientY-r.top)/r.height));});
+
+let mode='menu';
+function setMode(m){ mode=m; if(m==='pong')pongInit(); if(m==='tetris')tetInit(); }
+
+// ===== PONG (mirrors firmware) =====
+let P;
+function pongInit(){ P={p1x:Nx/2,p1y:Ny/2,p2x:Nx/2,p2y:Ny/2,s1:0,s2:0,f1:0,f2:0}; pongServe(Math.random()<.5?1:0); }
+function pongServe(t){ const a=Math.random()*6.283; P.bx=Nx/2;P.by=Ny/2;P.bz=Nz/2;
+  P.vx=Math.cos(a)*PONG_SPEED*.35; P.vy=(Math.random()-.5)*PONG_SPEED*.4;
+  let rem=PONG_SPEED*PONG_SPEED-P.vx*P.vx-P.vy*P.vy; if(rem<0)rem=0; P.vz=(t?1:-1)*Math.sqrt(rem); }
+function moveTo(o,kx,ky,tx,ty,cap){ const dx=tx-o[kx],dy=ty-o[ky],d=Math.hypot(dx,dy);
+  if(d<=cap||d<1e-4){o[kx]=tx;o[ky]=ty;}else{o[kx]+=dx/d*cap;o[ky]+=dy/d*cap;} }
+function pongUpdate(dt){ if(dt>.05)dt=.05; const decay=Math.exp(-dt*4.5); P.f1*=decay;P.f2*=decay;
+  P.bx+=P.vx*dt;P.by+=P.vy*dt;P.bz+=P.vz*dt;
+  if(P.bx<0){P.bx=0;P.vx=Math.abs(P.vx);} if(P.bx>Nx-1){P.bx=Nx-1;P.vx=-Math.abs(P.vx);}
+  if(P.by<0){P.by=0;P.vy=Math.abs(P.vy);} if(P.by>Ny-1){P.by=Ny-1;P.vy=-Math.abs(P.vy);}
+  const backZ=Nz-1;
+  if(P.bz<0){const dx=P.bx-P.p1x,dy=P.by-P.p1y; if(Math.abs(dx)<=PONG_PSIZE&&Math.abs(dy)<=PONG_PSIZE){P.bz=0;P.vz=Math.abs(P.vz);P.vx+=dx;P.vy+=dy;P.f1=1;}else{P.s2++;pongServe(0);return;}}
+  if(P.bz>backZ){const dx=P.bx-P.p2x,dy=P.by-P.p2y; if(Math.abs(dx)<=PONG_PSIZE&&Math.abs(dy)<=PONG_PSIZE){P.bz=backZ;P.vz=-Math.abs(P.vz);P.vx+=dx;P.vy+=dy;P.f2=1;}else{P.s1++;pongServe(1);return;}}
+  const vm=Math.hypot(P.vx,P.vy,P.vz); if(vm>.001){const k=PONG_SPEED/vm;P.vx*=k;P.vy*=k;P.vz*=k;}
+  // P1 = you (mouse → near face). P2 = AI.
+  moveTo(P,'p1x','p1y',mouse.x*(Nx-1),mouse.y*(Ny-1),30*dt);
+  let ax=P.bx,ay=P.by; if(P.vz>1e-6){const ti=(backZ-P.bz)/P.vz;ax=P.bx+P.vx*ti;ay=P.by+P.vy*ti;}
+  moveTo(P,'p2x','p2y',ax,ay,PONG_AISKILL*Math.max(Nx,Ny)*dt);
+  P.p1x=Math.max(0,Math.min(Nx-1,P.p1x));P.p1y=Math.max(0,Math.min(Ny-1,P.p1y));
+  P.p2x=Math.max(0,Math.min(Nx-1,P.p2x));P.p2y=Math.max(0,Math.min(Ny-1,P.p2y));
+}
+function pongRender(){ clearV(); const backZ=Nz-1;
+  const plate=(px,py,z,r,gg,b,fl)=>{const cx=Math.round(px),cy=Math.round(py);
+    for(let dy=-PONG_PSIZE;dy<=PONG_PSIZE;dy++)for(let dx=-PONG_PSIZE;dx<=PONG_PSIZE;dx++){const br=180+60*fl;addV(cx+dx,cy+dy,z,r*br/255,gg*br/255,b*br/255);}};
+  plate(P.p1x,P.p1y,0,255,60,90,P.f1); plate(P.p2x,P.p2y,backZ,60,140,255,P.f2);
+  glow(P.bx,P.by,P.bz,2.2,255,210,90,.7); glow(P.bx,P.by,P.bz,1.0,255,255,230,1.0);
+  addV(Math.round(P.bx),Math.round(P.by),Math.round(P.bz),255,255,245);
+}
+
+// ===== TETRIS (mirrors firmware) =====
+const PIECES=[
+ {c:[90,200,255],r:[[[0,0,0],[1,0,0],[2,0,0],[3,0,0]],[[0,0,0],[0,0,1],[0,0,2],[0,0,3]],[[0,0,0],[0,1,0],[0,2,0],[0,3,0]]]},
+ {c:[255,225,60],r:[[[0,0,0],[1,0,0],[0,0,1],[1,0,1]],[[0,0,0],[0,1,0],[1,0,0],[1,1,0]]]},
+ {c:[200,90,255],r:[[[0,0,0],[1,0,0],[2,0,0],[1,0,1]],[[0,0,0],[0,0,1],[0,0,2],[1,0,1]],[[0,0,0],[1,0,0],[2,0,0],[1,1,0]]]},
+ {c:[255,140,30],r:[[[0,0,0],[1,0,0],[2,0,0],[0,0,1]],[[0,0,0],[0,0,1],[0,0,2],[1,0,0]],[[0,0,0],[0,1,0],[0,2,0],[1,0,0]]]},
+ {c:[60,230,120],r:[[[0,0,0],[1,0,0],[1,0,1],[2,0,1]],[[0,0,1],[0,0,0],[1,1,0],[1,1,1]]]},
+ {c:[255,70,150],r:[[[0,0,0],[1,0,0],[0,1,0],[0,0,1]],[[0,0,0],[1,0,0],[0,0,1],[1,1,0]],[[0,0,0],[0,1,0],[0,0,1],[1,1,1]]]},
+];
+let T;
+function tetInit(){ T={stack:new Uint8Array(Nx*Ny*Nz),col:new Uint8Array(Nx*Ny*Nz*3),acc:0,pulse:0,score:0,flash:[]}; tetSpawn(); }
+function foot(pi,ri){let mx=0,my=0,mz=0;for(const b of PIECES[pi].r[ri]){mx=Math.max(mx,b[0]);my=Math.max(my,b[1]);mz=Math.max(mz,b[2]);}return[mx,my,mz];}
+function tetColl(ri,px,py,pz){for(const b of PIECES[T.pi].r[ri]){const x=px+b[0],y=py+b[1],z=pz+b[2];if(x<0||x>=Nx||z<0||z>=Nz||y<0||y>=Ny)return true;if(T.stack[vidx(x,y,z)])return true;}return false;}
+function tetSpawn(){ T.pi=Math.floor(Math.random()*6); T.ri=Math.floor(Math.random()*PIECES[T.pi].r.length);
+  const[mx,my,mz]=foot(T.pi,T.ri); T.px=Math.max(0,(Nx-1-mx>>1)); T.pz=Math.max(0,(Nz-1-mz>>1)); T.py=Ny-1-my; T.has=true;
+  if(tetColl(T.ri,T.px,T.py,T.pz)){ T.pulse=1; tetInit(); } }
+function tetLock(){ const c=PIECES[T.pi].c; for(const b of PIECES[T.pi].r[T.ri]){const x=T.px+b[0],y=T.py+b[1],z=T.pz+b[2];if(x<0||x>=Nx||y<0||y>=Ny||z<0||z>=Nz)continue;const id=vidx(x,y,z);T.stack[id]=1;T.col[id*3]=c[0];T.col[id*3+1]=c[1];T.col[id*3+2]=c[2];}
+  for(let y=0;y<Ny;y++){let full=true;for(let x=0;x<Nx&&full;x++)for(let z=0;z<Nz&&full;z++)if(!T.stack[vidx(x,y,z)])full=false;
+   if(full&&!T.flash.some(f=>f.y===y))T.flash.push({y,t:1});} }
+function tetCollapse(y){ for(let yy=y;yy<Ny-1;yy++)for(let x=0;x<Nx;x++)for(let z=0;z<Nz;z++){const s=vidx(x,yy+1,z),d=vidx(x,yy,z);T.stack[d]=T.stack[s];T.col[d*3]=T.col[s*3];T.col[d*3+1]=T.col[s*3+1];T.col[d*3+2]=T.col[s*3+2];}
+  for(let x=0;x<Nx;x++)for(let z=0;z<Nz;z++){const id=vidx(x,Ny-1,z);T.stack[id]=0;T.col[id*3]=T.col[id*3+1]=T.col[id*3+2]=0;} T.pulse=1; T.score++; }
+function tetKey(k){ if(mode!=='tetris'||!T||!T.has)return;
+  if(k==='arrowleft'&&!tetColl(T.ri,T.px-1,T.py,T.pz))T.px--;
+  if(k==='arrowright'&&!tetColl(T.ri,T.px+1,T.py,T.pz))T.px++;
+  if(k==='arrowup'&&!tetColl(T.ri,T.px,T.py,T.pz+1))T.pz++;
+  if(k==='arrowdown'&&!tetColl(T.ri,T.px,T.py,T.pz-1))T.pz--;
+  if((k==='r'||k===' ')&&true){const nr=(T.ri+1)%PIECES[T.pi].r.length;if(!tetColl(nr,T.px,T.py,T.pz))T.ri=nr;}
+  if(k==='enter'){while(!tetColl(T.ri,T.px,T.py-1,T.pz))T.py--;tetLock();T.has=false;tetSpawn();}
+}
+function tetUpdate(dt){ if(dt>.05)dt=.05; if(T.pulse>0){T.pulse-=dt*3.2;if(T.pulse<0)T.pulse=0;}
+  for(let i=T.flash.length-1;i>=0;i--){T.flash[i].t-=dt/TET_FLASHDUR; if(T.flash[i].t<=0){const y=T.flash[i].y;tetCollapse(y);T.flash.splice(i,1);for(const f of T.flash)if(f.y>y)f.y--;}}
+  if(!T.has)return;
+  const soft=keys['shift']; T.acc+=(soft?TET_SOFT:TET_FALL)*dt; let st=0;
+  while(T.acc>=1&&st<64){T.acc--;st++; if(tetColl(T.ri,T.px,T.py-1,T.pz)){tetLock();T.has=false;tetSpawn();break;} T.py--;}
+}
+function tetRender(){ clearV();
+  for(let x=0;x<Nx;x++)for(let y=0;y<Ny;y++)for(let z=0;z<Nz;z++){const id=vidx(x,y,z);if(!T.stack[id])continue;addV(x,y,z,T.col[id*3]*.8,T.col[id*3+1]*.8,T.col[id*3+2]*.8);}
+  if(T.has){const c=PIECES[T.pi].c; let gy=T.py; while(gy>0&&!tetColl(T.ri,T.px,gy-1,T.pz))gy--;
+    for(const b of PIECES[T.pi].r[T.ri])if(gy<T.py)addV(T.px+b[0],gy+b[1],T.pz+b[2],c[0]/6,c[1]/6,c[2]/6);
+    for(const b of PIECES[T.pi].r[T.ri]){const x=T.px+b[0],y=T.py+b[1],z=T.pz+b[2];addV(x,y,z,c[0],c[1],c[2]);
+      addV(x+1,y,z,c[0]/4,c[1]/4,c[2]/4);addV(x-1,y,z,c[0]/4,c[1]/4,c[2]/4);addV(x,y+1,z,c[0]/4,c[1]/4,c[2]/4);addV(x,y-1,z,c[0]/4,c[1]/4,c[2]/4);addV(x,y,z+1,c[0]/4,c[1]/4,c[2]/4);addV(x,y,z-1,c[0]/4,c[1]/4,c[2]/4);}}
+  for(const f of T.flash){const k=Math.max(0,Math.min(1,f.t)),v=90+165*k*k;for(let x=0;x<Nx;x++)for(let z=0;z<Nz;z++)addV(x,f.y,z,v,v,v);}
+  if(T.pulse>0){const a=60*T.pulse;for(let x=0;x<Nx;x++)for(let y=0;y<Ny;y++)for(let z=0;z<Nz;z++)addV(x,y,z,a,a*.9,a*.8);}
+}
+
+// ===== loop + HUD =====
+let last=performance.now();
+function frame(now){ const dt=Math.min(.05,(now-last)/1000); last=now;
+  if(mode==='pong'){pongUpdate(dt);pongRender();hud.innerHTML=`<b>PONG</b> — You ${P.s1} : ${P.s2} CPU &nbsp;|&nbsp; <span class="key">move mouse</span> to move your paddle &nbsp;|&nbsp; <span class="key">Esc</span> menu`;}
+  else if(mode==='tetris'){tetUpdate(dt);tetRender();hud.innerHTML=`<b>TETRIS</b> — lines: ${T.score} &nbsp;|&nbsp; <span class="key">←→</span> move X &nbsp; <span class="key">↑↓</span> move Z &nbsp; <span class="key">R</span> rotate &nbsp; <span class="key">Enter</span> drop &nbsp; <span class="key">Shift</span> soft &nbsp;|&nbsp; <span class="key">Esc</span> menu`;}
+  else { clearV(); const t=now/1000; for(let y=0;y<Ny;y++){const h=(y/(Ny-1)+t*.1)%1;const c=hsv(h,.8,.7);for(let x=0;x<Nx;x++)for(let z=0;z<Nz;z++)if((x+y+z)%3===0)addV(x,y,z,c[0],c[1],c[2]);}
+    render(); hud.innerHTML=`<b>VolumeCube Arcade preview</b><br>press <span class="key">1</span> Pong vs CPU &nbsp; <span class="key">2</span> Tetris`; requestAnimationFrame(frame); return; }
+  render(); requestAnimationFrame(frame);
+}
+function hsv(h,s,v){h=(h%1+1)%1;const i=Math.floor(h*6),f=h*6-i,p=v*(1-s),q=v*(1-f*s),tt=v*(1-(1-f)*s);let r,gg,b;switch(i%6){case 0:r=v;gg=tt;b=p;break;case 1:r=q;gg=v;b=p;break;case 2:r=p;gg=v;b=tt;break;case 3:r=p;gg=q;b=v;break;case 4:r=tt;gg=p;b=v;break;default:r=v;gg=p;b=q;}return[r*255,gg*255,b*255];}
+addEventListener('keydown',e=>{const k=e.key.toLowerCase(); if(k==='1')setMode('pong'); if(k==='2')setMode('tetris'); if(k==='escape')mode='menu';});
+requestAnimationFrame(frame);
+</script></body></html>
