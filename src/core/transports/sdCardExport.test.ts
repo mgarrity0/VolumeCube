@@ -44,7 +44,10 @@ beforeEach(() => {
   wrote.length = 0;
 });
 
-import { bakeForSdCard, BIN_MAGIC, BIN_VERSION, BIN_HEADER_LEN } from './sdCardExport';
+import {
+  bakeForSdCard, BIN_MAGIC, BIN_VERSION, BIN_HEADER_LEN,
+  buildCubeMap, CUBE_MAGIC, CUBE_VERSION, CUBE_HEADER_LEN, CUBE_NO_LED,
+} from './sdCardExport';
 import { autoLayoutDigOcta } from './index';
 import { defaultColorConfig } from '../colorPipeline';
 import { defaultPowerConfig } from '../power';
@@ -70,11 +73,13 @@ describe('SD-card bake — file structure', () => {
     });
     expect(res.errors).toEqual([]);
     expect(res.patternsBaked).toBe(2);
-    // 2 boards × (1 config + 2 patterns) = 6 files written.
-    expect(wrote.length).toBe(6);
+    // 2 boards × (1 config + 1 cube.bin + 2 patterns) = 8 files written.
+    expect(wrote.length).toBe(8);
     const paths = wrote.map((w) => w.relPath);
     expect(paths.some((p) => /BoardA\/config\.json$/.test(p))).toBe(true);
     expect(paths.some((p) => /BoardB\/config\.json$/.test(p))).toBe(true);
+    expect(paths.some((p) => /BoardA\/cube\.bin$/.test(p))).toBe(true);
+    expect(paths.some((p) => /BoardB\/cube\.bin$/.test(p))).toBe(true);
     expect(paths.filter((p) => /\/animations\/.+\.bin$/.test(p)).length).toBe(4);
   });
 
@@ -175,6 +180,65 @@ describe('SD-card bake — .bin file format', () => {
     expect(res.patternsBaked).toBe(2);
     expect(res.errors.length).toBe(1);
     expect(res.errors[0]).toContain('broken');
+  });
+});
+
+describe('cube.bin — geometry + wiring LUT for live patterns', () => {
+  it('builds a valid header (magic/version/dims/count) for a single board', () => {
+    // Single board = whole 10x10x10 cube; identity-ish address map under
+    // default wiring, but we only assert structure + bijection here.
+    const total = 1000;
+    const addr = new Uint32Array(total);
+    for (let i = 0; i < total; i++) addr[i] = i; // simplest stand-in
+    const buf = buildCubeMap(10, 10, 10, addr, 0, total);
+    expect(buf[0]).toBe(CUBE_MAGIC[0]);
+    expect(buf[4]).toBe(CUBE_VERSION);
+    expect(buf[6] | (buf[7] << 8)).toBe(10);          // Nx
+    expect(buf[10] | (buf[11] << 8)).toBe(10);        // Nz
+    const count = buf[12] | (buf[13] << 8) | (buf[14] << 16) | (buf[15] << 24);
+    expect(count).toBe(1000);
+    expect(buf.length).toBe(CUBE_HEADER_LEN + 1000 * 2);
+    // Identity map → local index L for every voxel, none marked NO_LED.
+    const localAt = (L: number) => buf[CUBE_HEADER_LEN + L * 2] | (buf[CUBE_HEADER_LEN + L * 2 + 1] << 8);
+    expect(localAt(0)).toBe(0);
+    expect(localAt(999)).toBe(999);
+  });
+
+  it('marks voxels outside this board\'s LED range as CUBE_NO_LED', () => {
+    // Two-board split: board B owns global stream 500..999. Its cube map
+    // should localize those and mark 0..499 as not-on-this-board.
+    const total = 1000;
+    const addr = new Uint32Array(total);
+    for (let i = 0; i < total; i++) addr[i] = i;
+    const buf = buildCubeMap(10, 10, 10, addr, 500, 500); // board B
+    const localAt = (L: number) => buf[CUBE_HEADER_LEN + L * 2] | (buf[CUBE_HEADER_LEN + L * 2 + 1] << 8);
+    expect(localAt(0)).toBe(CUBE_NO_LED);     // global stream 0 → not on board B
+    expect(localAt(499)).toBe(CUBE_NO_LED);
+    expect(localAt(500)).toBe(0);             // global 500 → local 0
+    expect(localAt(999)).toBe(499);           // global 999 → local 499
+  });
+
+  it('emits cube.bin alongside config in a real bake (default panels wiring)', async () => {
+    await bakeForSdCard({
+      ...baseArgs(),
+      boards: autoLayoutDigOcta(1000, 1, 5), // single board, the user's rig
+      patternNames: ['classics/solid.js'],
+    });
+    const cube = wrote.find((w) => /BoardA\/cube\.bin$/.test(w.relPath));
+    expect(cube?.bytes).toBeDefined();
+    const b = cube!.bytes!;
+    expect(b[0]).toBe(CUBE_MAGIC[0]);
+    const count = b[12] | (b[13] << 8) | (b[14] << 16) | (b[15] << 24);
+    expect(count).toBe(1000);
+    // Single board owns all 1000 LEDs → every voxel maps to a real LED
+    // (a bijection into 0..999), none CUBE_NO_LED.
+    const seen = new Uint8Array(1000);
+    for (let L = 0; L < 1000; L++) {
+      const local = b[CUBE_HEADER_LEN + L * 2] | (b[CUBE_HEADER_LEN + L * 2 + 1] << 8);
+      expect(local).toBeLessThan(1000);
+      expect(seen[local]).toBe(0);
+      seen[local] = 1;
+    }
   });
 });
 

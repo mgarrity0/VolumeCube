@@ -62,6 +62,62 @@ export const BIN_HEADER_LEN = 16;
 // from clamping/sanitizing are disambiguated with a numeric suffix.
 export const MAX_STEM = 60;
 
+// ---- cube.bin: geometry + wiring lookup for LIVE patterns (e.g. Pong) ----
+// The SD player only needs flat baked frames, but a live game running on the
+// board has to map a voxel (x,y,z) to a physical LED — i.e. it needs the
+// cube dimensions and the wiring address map. We precompute that here (where
+// the wiring logic already lives and is tested) and ship it as a tiny file:
+//
+//   bytes 0-3   magic 'VCUB'
+//   byte  4     version = 1
+//   byte  5     reserved
+//   bytes 6-7   Nx  uint16 LE
+//   bytes 8-9   Ny  uint16 LE
+//   bytes 10-11 Nz  uint16 LE
+//   bytes 12-15 voxelCount uint32 LE  (= Nx*Ny*Nz)
+//   bytes 16+   voxelCount × uint16 LE: for logical voxel L (= (x*Ny+y)*Nz+z),
+//               the LOCAL LED index in THIS board's buffer, or 0xFFFF if that
+//               voxel isn't driven by this board.
+export const CUBE_MAGIC = [0x56, 0x43, 0x55, 0x42]; // 'VCUB'
+export const CUBE_VERSION = 1;
+export const CUBE_HEADER_LEN = 16;
+export const CUBE_NO_LED = 0xffff;
+
+/**
+ * Build the per-board cube map. `addressMap` is logical→GLOBAL stream index
+ * (from buildAddressMapForCube); we translate to this board's local LED
+ * index by subtracting its ledStart, marking voxels outside its range as
+ * CUBE_NO_LED so a live pattern only lights LEDs this board actually drives.
+ */
+export function buildCubeMap(
+  Nx: number,
+  Ny: number,
+  Nz: number,
+  addressMap: Uint32Array,
+  boardLedStart: number,
+  boardLedCount: number,
+): Uint8Array {
+  const count = Nx * Ny * Nz;
+  const buf = new Uint8Array(CUBE_HEADER_LEN + count * 2);
+  buf[0] = CUBE_MAGIC[0]; buf[1] = CUBE_MAGIC[1]; buf[2] = CUBE_MAGIC[2]; buf[3] = CUBE_MAGIC[3];
+  buf[4] = CUBE_VERSION;
+  buf[5] = 0;
+  buf[6] = Nx & 0xff;  buf[7] = (Nx >> 8) & 0xff;
+  buf[8] = Ny & 0xff;  buf[9] = (Ny >> 8) & 0xff;
+  buf[10] = Nz & 0xff; buf[11] = (Nz >> 8) & 0xff;
+  buf[12] = count & 0xff; buf[13] = (count >> 8) & 0xff;
+  buf[14] = (count >> 16) & 0xff; buf[15] = (count >> 24) & 0xff;
+  const end = boardLedStart + boardLedCount;
+  for (let L = 0; L < count; L++) {
+    const s = addressMap[L];
+    const local = (s >= boardLedStart && s < end) ? (s - boardLedStart) : CUBE_NO_LED;
+    const o = CUBE_HEADER_LEN + L * 2;
+    buf[o] = local & 0xff;
+    buf[o + 1] = (local >> 8) & 0xff;
+  }
+  return buf;
+}
+
 export type SdCardBakeArgs = {
   /** Pattern relative paths to bake (e.g. "classics/harmonic-blob.js"). */
   patternNames: string[];
@@ -125,6 +181,16 @@ export async function bakeForSdCard(
       contents: JSON.stringify(cfg, null, 2),
     });
     paths.push(wrote);
+
+    // cube.bin — geometry + wiring LUT so a live game (Pong) can map
+    // voxels to this board's LEDs. Tiny (~2 KB); harmless for the player.
+    const cubeMap = buildCubeMap(Nx, Ny, Nz, addressMap, board.ledStart, board.ledCount);
+    const cubeRel = `${baseDir}/Board${board.id}/cube.bin`;
+    const wroteCube = await invoke<string>('write_export_bytes', {
+      relPath: cubeRel,
+      bytes: Array.from(cubeMap),
+    });
+    paths.push(wroteCube);
   }
 
   // ---- One .bin per pattern × board ----
